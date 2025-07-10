@@ -14,10 +14,6 @@ pipeline {
         CLOUDINARY_API_SECRET = credentials('CLOUDINARY_API_SECRET')
     }
 
-    tools {
-        nodejs 'NodeJS'
-    }
-
     stages {
         stage('Checkout') {
             steps {
