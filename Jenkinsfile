@@ -4,6 +4,14 @@ pipeline {
     environment {
         DOCKER_IMAGE = 'badminton-shop'
         DOCKER_TAG = 'latest'
+        PORT = '3000'
+        NODE_ENV = 'production'
+        MONGODB_URI = credentials('MONGODB_URI')
+        JWT_SECRET = credentials('JWT_SECRET')
+        SESSION_SECRET = credentials('SESSION_SECRET')
+        CLOUDINARY_CLOUD_NAME = credentials('CLOUDINARY_CLOUD_NAME')
+        CLOUDINARY_API_KEY = credentials('CLOUDINARY_API_KEY')
+        CLOUDINARY_API_SECRET = credentials('CLOUDINARY_API_SECRET')
     }
 
     tools {
@@ -15,6 +23,25 @@ pipeline {
             steps {
                 cleanWs()
                 checkout scm
+            }
+        }
+
+        stage('Create .env file') {
+            steps {
+                script {
+                    sh '''
+cat > .env <<EOL
+PORT=${PORT}
+NODE_ENV=${NODE_ENV}
+MONGODB_URI=${MONGODB_URI}
+JWT_SECRET=${JWT_SECRET}
+SESSION_SECRET=${SESSION_SECRET}
+CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+EOL
+                    '''
+                }
             }
         }
 
@@ -45,36 +72,51 @@ pipeline {
         stage('Stop Previous Container') {
             steps {
                 sh '''
-                    docker-compose down || true
-                    docker system prune -f -a -y
+                    if docker ps -a | grep -q ${DOCKER_IMAGE}; then
+                        docker stop ${DOCKER_IMAGE}
+                        docker rm ${DOCKER_IMAGE}
+                    fi
                 '''
             }
         }
 
         stage('Deploy') {
             steps {
-                sh 'docker-compose up -d'
+                sh '''
+                    docker run -d \
+                        --name ${DOCKER_IMAGE} \
+                        -p 80:3000 \
+                        --env-file .env \
+                        ${DOCKER_IMAGE}:${DOCKER_TAG}
+                '''
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                sh '''
+                    sleep 30
+                    if curl -f http://localhost:80 >/dev/null 2>&1; then
+                        echo "App is running"
+                    else
+                        echo "Health check failed"
+                        docker logs ${DOCKER_IMAGE} || true
+                        exit 1
+                    fi
+                '''
             }
         }
     }
 
     post {
-        always {
-            cleanWs()
-        }
         success {
-            script {
-                def publicIP = sh(script: 'curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost"', returnStdout: true).trim()
-                echo "🎉 Deployment successful!"
-                echo "🌐 Application URL: https://${publicIP}"
-                echo "🔧 Jenkins URL: http://${publicIP}:8080"
-            }
+            echo 'Pipeline executed successfully!'
         }
         failure {
-            script {
-                echo "❌ Deployment failed! Check the logs for more details."
-                sh "docker-compose logs --tail=50"
-            }
+            echo 'Pipeline failed!'
+        }
+        always {
+            sh 'docker system prune -f'
         }
     }
 }
