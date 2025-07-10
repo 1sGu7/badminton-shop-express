@@ -86,10 +86,10 @@ EOL
             steps {
                 sh '''
                     sleep 30
-                    if curl -f http://localhost:3000 >/dev/null 2>&1; then
-                        echo "App is running"
+                    if curl -f http://localhost:80 >/dev/null 2>&1 || curl -f http://127.0.0.1:80 >/dev/null 2>&1; then
+                        echo 'App is running'
                     else
-                        echo "Health check failed"
+                        echo 'Health check failed'
                         docker logs ${DOCKER_IMAGE} || true
                         exit 1
                     fi
