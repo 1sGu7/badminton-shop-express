@@ -3,21 +3,37 @@ pipeline {
     
     environment {
         DOCKER_IMAGE = 'badminton-shop'
-        DOCKER_TAG = "${env.BUILD_NUMBER}"
-        CONTAINER_NAME = 'badminton-shop-app'
-        NGINX_CONTAINER = 'badminton-shop-nginx'
-        APP_DIR = '/opt/badminton-shop'
+        DOCKER_TAG = 'latest'
+    }
+    
+    tools {
+        nodejs 'NodeJS'
+        jdk 'JDK21'
     }
     
     stages {
-        stage('Checkout') {
+        stage('Cleanup Workspace') {
             steps {
+                cleanWs()
                 checkout scm
             }
         }
         
-        stage('Setup Environment') {
+        stage('Install Dependencies') {
             steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('Generate SSL Certificate') {
+            steps {
+                sh '''
+                    mkdir -p nginx/ssl
+                    cd nginx/ssl
+                    openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt -subj "/C=VN/ST=HCM/L=HCM/O=Badminton Shop/OU=IT/CN=localhost"
+                '''
+            }
+        }
                 script {
                     // Create application directory if not exists
                     sh "sudo mkdir -p ${APP_DIR}"
@@ -71,101 +87,29 @@ pipeline {
         
         stage('Build Docker Image') {
             steps {
-                dir("${APP_DIR}") {
-                    script {
-                        // Build the Docker image
-                        sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
-                        sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
-                    }
+                script {
+                    sh 'docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .'
                 }
             }
         }
         
-        stage('Security Scan') {
+        stage('Stop Previous Container') {
             steps {
                 script {
-                    // Run security scan with Trivy (if available)
-                    sh 'which trivy && trivy image --exit-code 1 --severity HIGH,CRITICAL ${DOCKER_IMAGE}:${DOCKER_TAG} || echo "Trivy not available, skipping security scan"'
-                }
-            }
-        }
-        
-        stage('Deploy Application') {
-            steps {
-                dir("${APP_DIR}") {
-                    script {
-                        // Stop and remove existing containers
-                        sh "docker-compose down || true"
-                        sh "docker rm -f ${CONTAINER_NAME} ${NGINX_CONTAINER} || true"
-                        
-                        // Remove old images to save space
-                        sh "docker image prune -f"
-                        
-                        // Start the application
-                        sh "docker-compose up -d"
-                        
-                        // Wait for application to be healthy
-                        sh "sleep 30"
-                        
-                        // Health check
-                        sh "curl -f http://localhost/health || exit 1"
-                    }
-                }
-            }
-        }
-        
-        stage('Setup Auto-restart') {
-            steps {
-                script {
-                    // Create systemd service for auto-restart
                     sh '''
-                    sudo tee /etc/systemd/system/badminton-shop.service > /dev/null << 'EOF'
-[Unit]
-Description=Badminton Shop Application
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=/opt/badminton-shop
-ExecStart=/usr/local/bin/docker-compose up -d
-ExecStop=/usr/local/bin/docker-compose down
-User=ubuntu
-Group=ubuntu
-
-[Install]
-WantedBy=multi-user.target
-EOF
-                    '''
-                    
-                    // Enable the service
-                    sh "sudo systemctl daemon-reload"
-                    sh "sudo systemctl enable badminton-shop.service"
-                    
-                    // Create log rotation
-                    sh '''
-                    sudo tee /etc/logrotate.d/badminton-shop > /dev/null << 'EOF'
-/opt/badminton-shop/logs/*.log {
-    daily
-    missingok
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-    create 644 ubuntu ubuntu
-}
-EOF
+                        docker-compose down || true
+                        docker system prune -f
                     '''
                 }
             }
         }
         
-        stage('Cleanup') {
+        stage('Deploy') {
             steps {
                 script {
-                    // Keep only the latest 5 images to save disk space
-                    sh "docker images ${DOCKER_IMAGE} --format 'table {{.Repository}}:{{.Tag}}' | tail -n +6 | xargs -r docker rmi || true"
+                    sh '''
+                        docker-compose up -d
+                    '''
                 }
             }
         }
@@ -204,4 +148,4 @@ EOF
             }
         }
     }
-} 
+}

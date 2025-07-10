@@ -100,41 +100,37 @@ docker rm badminton-shop-app
 
 ## 🔄 Hướng dẫn khởi động lại website khi máy chủ tắt hoặc khởi động lại
 
-Khi EC2/VPS/server bị tắt hoặc reboot, website sẽ **TỰ ĐỘNG KHỞI ĐỘNG LẠI** nhờ systemd service.
+Khi EC2/VPS/server bị tắt hoặc reboot, bạn cần khởi động lại website thủ công như sau:
 
-Nếu cần khởi động lại thủ công:
-
-1. **Đăng nhập SSH vào server, cd vào thư mục dự án:**
+1. Đăng nhập SSH vào server, cd vào thư mục dự án.
+2. Nếu container cũ còn, xóa trước:
    ```bash
-   ssh -i your-key.pem ubuntu@your-ec2-public-ip
-   cd /opt/badminton-shop
+   docker rm -f badminton-web
    ```
-
-2. **Restart containers:**
+3. Chạy lại container:
    ```bash
-   docker-compose restart
+   docker run -d --name badminton-web -p 80:80 -p 443:443 --env-file .env badminton-web:latest
    ```
-
-3. **Hoặc restart service:**
+4. Nếu cần build lại image:
    ```bash
-   sudo systemctl restart badminton-shop.service
+   docker build -t badminton-web:latest .
+   docker run -d --name badminton-web -p 80:80 -p 443:443 --env-file .env badminton-web:latest
    ```
-
-4. **Kiểm tra status:**
+5. Kiểm tra log:
    ```bash
-   sudo systemctl status badminton-shop.service
-   docker-compose ps
+   docker logs badminton-web
    ```
+6. Truy cập lại web qua IP hoặc domain.
 
-## 🚀 ONE-CLICK DEPLOYMENT với Jenkins (AWS EC2 Free Tier)
+**Khuyến nghị:** Nên dùng Docker restart policy (`--restart unless-stopped`) để container tự khởi động lại khi máy chủ reboot.
 
-### 🎯 **Mục tiêu: Chỉ cần bấm "Build Now" trên Jenkins, mọi thứ sẽ tự động hoàn thành!**
+---
 
-<h3 align="center">🚀 ONE-CLICK DEPLOYMENT với Jenkins (AWS EC2 Free Tier)</h3>
+# 🚀 CI/CD Setup Guide with Jenkins (AWS EC2 Free Tier)
 
-### Yêu cầu hệ thống
+## Yêu cầu hệ thống
 
-1. **AWS EC2 instance (Free Tier):**
+1. AWS EC2 instance (Free Tier):
    - Ubuntu Server 24.04 LTS (khuyến nghị, nhẹ, ổn định)
    - 1 vCPU, 1GB RAM, 8GB storage (Free Tier)
    - Security group mở các port:
@@ -143,81 +139,139 @@ Nếu cần khởi động lại thủ công:
      - 443 (HTTPS)
      - 8080 (Jenkins)
 
-2. **GitHub repository** với mã nguồn project
+2. GitHub repository với mã nguồn project
 
-### Các bước cài đặt
+## Các bước cài đặt
 
-#### 1. Setup EC2 (Chỉ làm 1 lần)
+### 1. Install Jenkins & Java (latest stable)
 
 ```bash
-# SSH vào EC2
-ssh -i your-key.pem ubuntu@your-ec2-public-ip
+# Update system
+sudo apt update && sudo apt upgrade -y
 
-# Chạy script setup tự động
-wget https://raw.githubusercontent.com/your-repo/badminton-shop-express/main/scripts/setup-ec2.sh
-chmod +x setup-ec2.sh
-./setup-ec2.sh
+# Install latest OpenJDK (JDK 21 LTS)
+sudo apt install openjdk-21-jdk -y
+
+# Verify Java version
+java -version
+
+# Add Jenkins repository
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee \
+  /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+  https://pkg.jenkins.io/debian-stable binary/ | sudo tee \
+  /etc/apt/sources.list.d/jenkins.list > /dev/null
+
+# Install Jenkins
+sudo apt update
+sudo apt install jenkins -y
+
+# Start Jenkins
+sudo systemctl start jenkins
+sudo systemctl enable jenkins
 ```
 
-#### 2. Configure Jenkins (Chỉ làm 1 lần)
+### 2. Install Docker
 
-1. **Truy cập Jenkins tại http://your-ec2-ip:8080**
-2. **Lấy mật khẩu admin lần đầu:**
-   ```bash
-   sudo cat /var/lib/jenkins/secrets/initialAdminPassword
-   ```
-3. **Cài đặt plugin đề xuất**
-4. **Tạo user admin**
-5. **Cài thêm các plugin:**
-   - Docker Pipeline
-   - GitHub Integration
-   - Credentials Plugin
-   - Blue Ocean
+```bash
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
 
-#### 3. Thêm Jenkins Credentials (Chỉ làm 1 lần)
+# Add both ubuntu and jenkins user vào group docker (fix lỗi permission)
+sudo usermod -aG docker ubuntu
+sudo usermod -aG docker jenkins
+
+# Đăng xuất SSH và đăng nhập lại để group có hiệu lực (hoặc reboot)
+exit
+# Sau đó SSH lại vào EC2
+
+# Restart Jenkins để nhận quyền docker
+sudo systemctl restart jenkins
+```
+
+### 3. Configure Jenkins
+
+- Truy cập Jenkins tại http://your-ec2-ip:8080
+- Lấy mật khẩu admin lần đầu:
+  ```bash
+  sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+  ```
+- Cài đặt plugin đề xuất
+- Tạo user admin
+- Cài thêm các plugin:
+  - Docker Pipeline
+  - GitHub Integration
+  - Credentials Plugin
+
+### 4. Thêm Jenkins Credentials (biến môi trường bảo mật)
 
 **Hướng dẫn chi tiết:**
 
 1. Truy cập Jenkins Dashboard > Manage Jenkins > Manage Credentials
-2. Chọn (hoặc tạo) domain `Global`
-3. Nhấn **Add Credentials**
-4. Ở mục **Kind**, chọn **Secret text**
-5. Ở mục **Secret**, nhập giá trị tương ứng với biến môi trường
-6. Ở mục **ID**, nhập đúng tên biến môi trường
-7. Nhấn **OK** để lưu lại
+2. Chọn (hoặc tạo) domain Global (nếu chưa có, chọn (global) hoặc Global credentials (unrestricted))
+3. Nhấn Add Credentials (Thêm thông tin xác thực)
+4. Ở mục Kind, chọn Secret text
+5. Ở mục Secret, nhập giá trị tương ứng với biến môi trường (ví dụ: connection string MongoDB, JWT secret, v.v.)
+6. Ở mục ID, nhập đúng tên biến môi trường (ví dụ: MONGODB_URI, JWT_SECRET, ...)
+7. Nhấn OK để lưu lại
 
-**Lặp lại các bước trên cho từng biến sau:**
+Lặp lại các bước trên cho từng biến sau:
 
 | ID (tên biến)           | Giá trị cần nhập (Secret)                  |
 |-------------------------|--------------------------------------------|
 | MONGODB_URI             | MongoDB Atlas connection string            |
-| JWT_SECRET              | JWT secret key                             |
+| SESSION_SECRET          | Chuỗi bí mật cho session (bắt buộc)        |
 | CLOUDINARY_CLOUD_NAME   | Cloudinary cloud name                      |
 | CLOUDINARY_API_KEY      | Cloudinary API key                         |
 | CLOUDINARY_API_SECRET   | Cloudinary API secret                      |
+| JWT_SECRET              | JWT secret key                             |
+| PORT                    | 3000 (hoặc để trống nếu dùng mặc định)     |
 
-#### 4. Configure GitHub Webhook (Chỉ làm 1 lần)
+**Lưu ý:**
+- Phải nhập đúng ID (không có dấu cách, không thêm ký tự thừa)
+- Không public các giá trị này lên GitHub
+- Sau khi tạo xong, Jenkinsfile sẽ tự động lấy các giá trị này để build .env cho ứng dụng
+
+### 5. Configure GitHub Webhook
 
 1. Go to your GitHub repository > Settings > Webhooks
 2. Add webhook:
-   - Payload URL: `http://your-ec2-ip:8080/github-webhook/`
-   - Content type: `application/json`
+   - Payload URL: http://your-ec2-ip:8080/github-webhook/
+   - Content type: application/json
    - Select: Just the push event
    - Active: ✓
 
-#### 5. Create Jenkins Pipeline (Chỉ làm 1 lần)
+### 6. Create Jenkins Pipeline
 
 1. Go to Jenkins Dashboard > New Item
 2. Enter name and select "Pipeline"
 3. Configure:
-   - **GitHub project**: [Your repository URL]
-   - **Build Triggers**: GitHub hook trigger for GITScm polling
-   - **Pipeline**: Pipeline script from SCM
-   - **SCM**: Git
-   - **Repository URL**: [Your repository URL]
-   - **Credentials**: Add your GitHub credentials
-   - **Branch Specifier**: `*/main`
-   - **Script Path**: `Jenkinsfile`
+   - GitHub project: [Your repository URL]
+   - Build Triggers: GitHub hook trigger for GITScm polling
+   - Pipeline: Pipeline script from SCM
+   - SCM: Git
+   - Repository URL: [Your repository URL]
+   - Credentials: Add your GitHub credentials
+   - Branch Specifier: */main
+   - Script Path: Jenkinsfile
+
+### 7. Lưu ý tối ưu cho EC2 Free Tier
+- Dockerfile đã tối ưu, chỉ cài production dependencies.
+- Nếu gặp lỗi thiếu RAM, hãy bật swap:
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+- Chỉ chạy 2 container: app (Node.js) và nginx (proxy).
+- Không chạy thêm database, CI/CD tool hoặc service nào khác trên cùng máy.
+
+---
 
 ## 🎉 **ONE-CLICK DEPLOYMENT - Sử dụng**
 
@@ -394,4 +448,4 @@ Nếu gặp vấn đề:
 
 ## 📝 License
 
-MIT License - see LICENSE file for details. 
+MIT License - see LICENSE file for details.

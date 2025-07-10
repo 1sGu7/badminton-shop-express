@@ -1,23 +1,24 @@
-# Multi-stage build for lightweight production image
-FROM node:18-alpine AS builder
+# Use Node.js LTS version
+FROM node:20-slim
 
+# Create app directory
 WORKDIR /app
 
-# Copy package files
+# Install app dependencies
 COPY package*.json ./
+RUN npm install
 
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy source code
+# Bundle app source
 COPY . .
 
-# Build stage
-FROM node:18-alpine AS production
+# Set environment variables
+ENV NODE_ENV=production
 
-WORKDIR /app
+# Expose port
+EXPOSE 3000
 
-# Create non-root user for security
+# Start the application
+CMD ["npm", "start"]
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 

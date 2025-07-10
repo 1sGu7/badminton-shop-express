@@ -3,16 +3,18 @@ version: '3.8'
 services:
   app:
     build: .
-    container_name: badminton-shop-app
-    restart: unless-stopped
+    container_name: badminton-shop
+    restart: always
+    ports:
+      - "3000:3000"
     environment:
       - NODE_ENV=production
-      - PORT=3000
       - MONGODB_URI=${MONGODB_URI}
-      - JWT_SECRET=${JWT_SECRET}
       - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
       - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
       - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - JWT_SECRET=${JWT_SECRET}
     networks:
       - app-network
     healthcheck:
@@ -20,12 +22,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      timeout: 10s
+      retries: 3
       start_period: 40s
 
   nginx:
-    image: nginx:alpine
-    container_name: badminton-shop-nginx
-    restart: unless-stopped
+    image: nginx:latest
+    container_name: nginx-proxy
+    restart: always
     ports:
       - "80:80"
       - "443:443"
@@ -39,4 +43,4 @@ services:
 
 networks:
   app-network:
-    driver: bridge 
+    driver: bridge
