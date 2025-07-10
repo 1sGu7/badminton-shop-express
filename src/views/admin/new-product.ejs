@@ -1,0 +1,25 @@
+<%- include('../partials/header', { title: title, userId: userId }) %>
+<div class="hero">
+  <h1>Thêm sản phẩm</h1>
+</div>
+<form method="POST" action="/admin/products" enctype="multipart/form-data" class="w-100 mt-4" style="max-width:500px">
+  <div class="mb-3">
+    <label class="form-label">Tên sản phẩm</label>
+    <input type="text" class="form-control" name="name" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Mô tả</label>
+    <textarea class="form-control" name="description" required></textarea>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Giá (VNĐ)</label>
+    <input type="number" class="form-control" name="price" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Ảnh sản phẩm</label>
+    <input type="file" class="form-control" name="image" accept="image/*" required>
+  </div>
+  <button class="btn btn-add-product" type="submit"><span class="icon">+</span> Thêm</button>
+  <a href="/admin/products" class="btn btn-back"><span class="icon">&#8592;</span> Quay lại</a>
+</form>
+<%- include('../partials/footer') %> 

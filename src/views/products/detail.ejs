@@ -1,0 +1,13 @@
+<%- include('../partials/header', { title: title, userId: userId }) %>
+<div class="product-detail-layout">
+  <div class="product-detail-image">
+    <img src="<%= product.imageUrl %>" alt="Ảnh sản phẩm">
+  </div>
+  <div class="product-detail-info">
+    <h2><%= product.name %></h2>
+    <p><%= product.description %></p>
+    <div class="price"><%= product.price.toLocaleString() %> đ</div>
+    <a href="/products" class="btn btn-back"><span class="icon">&#8592;</span> Quay lại danh sách</a>
+  </div>
+</div>
+<%- include('../partials/footer') %> 

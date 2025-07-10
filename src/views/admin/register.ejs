@@ -1,0 +1,17 @@
+<%- include('../partials/header', { title: title, userId: userId }) %>
+<div class="hero">
+  <h1>Đăng ký Admin</h1>
+</div>
+<form method="POST" action="/auth/register" class="w-100 mt-4" style="max-width:400px">
+  <div class="mb-3">
+    <label for="username" class="form-label">Username</label>
+    <input type="text" class="form-control" id="username" name="username" required>
+  </div>
+  <div class="mb-3">
+    <label for="password" class="form-label">Mật khẩu</label>
+    <input type="password" class="form-control" id="password" name="password" required>
+  </div>
+  <button type="submit" class="btn btn-register">Đăng ký</button>
+  <a href="/auth/login" class="btn btn-login">Đăng nhập</a>
+</form>
+<%- include('../partials/footer') %> 

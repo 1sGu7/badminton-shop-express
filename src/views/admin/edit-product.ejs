@@ -1,0 +1,29 @@
+<%- include('../partials/header', { title: title, userId: userId }) %>
+<div class="hero">
+  <h1>Sửa sản phẩm</h1>
+</div>
+<form method="POST" action="/admin/products/<%= product._id %>" enctype="multipart/form-data" class="w-100 mt-4" style="max-width:500px">
+  <div class="mb-3">
+    <label class="form-label">Tên sản phẩm</label>
+    <input type="text" class="form-control" name="name" value="<%= product.name %>" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Mô tả</label>
+    <textarea class="form-control" name="description" required><%= product.description %></textarea>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Giá (VNĐ)</label>
+    <input type="number" class="form-control" name="price" value="<%= product.price %>" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Ảnh hiện tại</label><br>
+    <img src="<%= product.imageUrl %>" alt="Ảnh" style="width:100px;height:100px;object-fit:cover">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Đổi ảnh mới (nếu muốn)</label>
+    <input type="file" class="form-control" name="image" accept="image/*">
+  </div>
+  <button class="btn btn-update-product" type="submit"><span class="icon">&#9998;</span> Cập nhật</button>
+  <a href="/admin/products" class="btn btn-back"><span class="icon">&#8592;</span> Quay lại</a>
+</form>
+<%- include('../partials/footer') %> 

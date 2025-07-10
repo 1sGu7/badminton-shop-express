@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %> | Badminton Shop</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&family=Quicksand:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    body { background: #181f2a; }
+    .topbar { background: #232b3e; color: #fff; height: 64px; display: flex; align-items: center; justify-content: space-between; border-radius: 0 0 18px 18px; box-shadow: 0 2px 16px 0 rgba(80,180,255,0.07); padding: 0 32px; }
+    .topbar .logo { font-family: 'Quicksand', 'Montserrat', Arial, sans-serif; font-size: 2rem; font-weight: 900; color: #6ec6f1; letter-spacing: 2px; display: flex; align-items: center; }
+    .topbar .logo svg { margin-right: 10px; }
+    .topbar .menu { display: flex; gap: 24px; align-items: center; }
+    .topbar .menu a { color: #fff; font-size: 1.1rem; font-weight: 700; text-decoration: none; padding: 8px 18px; border-radius: 18px; transition: background 0.18s, color 0.18s; }
+    .topbar .menu a.active, .topbar .menu a:hover { background: #2a3957; color: #6ec6f1; }
+    .topbar .avatar { width: 38px; height: 38px; border-radius: 50%; background: #6ec6f1; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 1.2rem; margin-left: 18px; box-shadow: 0 2px 8px 0 rgba(80,180,255,0.13); }
+    @media (max-width: 900px) {
+      .topbar { padding: 0 8px; }
+      .topbar .logo { font-size: 1.2rem; }
+      .topbar .menu a { font-size: 1rem; padding: 6px 10px; }
+      .topbar .avatar { width: 30px; height: 30px; font-size: 1rem; }
+    }
+    .main-content { background: #232b3e; min-height: 100vh; border-radius: 18px; margin: 24px auto 0 auto; max-width: 1200px; box-shadow: 0 2px 32px 0 rgba(80,180,255,0.07); padding: 32px 24px 0 24px; }
+  </style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">
+    <svg width="32" height="32" fill="none" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" fill="#6ec6f1"/><path d="M10 22l12-12M10 10l12 12" stroke="#fff" stroke-width="2"/></svg>
+    BADMINTON
+  </div>
+  <div class="menu">
+    <a href="/products" class="<%= (title && title.includes('Sản phẩm')) ? 'active' : '' %>">Sản phẩm</a>
+    <% if (typeof userId !== 'undefined' && userId) { %>
+      <a href="/admin/products" class="<%= (title && title.includes('Quản lý')) ? 'active' : '' %>">Quản lý</a>
+      <a href="/auth/logout">Đăng xuất</a>
+      <div class="avatar">AD</div>
+    <% } else { %>
+      <a href="/auth/login" class="<%= (title && title.includes('Đăng nhập')) ? 'active' : '' %>">Admin</a>
+    <% } %>
+  </div>
+</div>
+<main class="main-content">
+  <% if (success && success.length) { %>
+    <div class="alert alert-success"><%= success %></div>
+  <% } %>
+  <% if (error && error.length) { %>
+    <div class="alert alert-danger"><%= error %></div>
+  <% } %> 

@@ -1,0 +1,35 @@
+<%- include('../partials/header', { title: title, userId: userId }) %>
+<div class="hero d-flex align-items-center justify-content-between">
+  <h1>Quản lý sản phẩm</h1>
+  <a href="/admin/products/new" class="btn btn-add-product"><span class="icon">+</span> Thêm sản phẩm</a>
+</div>
+<div class="table-responsive mt-4">
+  <table class="table table-bordered table-hover bg-white rounded shadow-sm">
+    <thead class="table-light">
+      <tr>
+        <th>Ảnh</th>
+        <th>Tên</th>
+        <th>Mô tả</th>
+        <th>Giá</th>
+        <th>Hành động</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% products.forEach(p => { %>
+        <tr>
+          <td><img src="<%= p.imageUrl %>" alt="Ảnh" style="width:60px;height:60px;object-fit:cover"></td>
+          <td><%= p.name %></td>
+          <td><%= p.description %></td>
+          <td><%= p.price.toLocaleString() %> đ</td>
+          <td>
+            <a href="/admin/products/<%= p._id %>/edit" class="btn btn-sm btn-main">Sửa</a>
+            <form method="POST" action="/admin/products/<%= p._id %>/delete" style="display:inline" onsubmit="return confirm('Xác nhận xóa?')">
+              <button class="btn btn-sm btn-alt">Xóa</button>
+            </form>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</div>
+<%- include('../partials/footer') %> 

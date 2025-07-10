@@ -1,0 +1,25 @@
+<%- include('../partials/header', { title: title, userId: userId }) %>
+<div class="hero">
+  <h1>Badminton Shop</h1>
+  <p>Chuyên linh kiện cầu lông chính hãng, giá tốt, giao hàng toàn quốc.</p>
+  <a href="#product-list" class="btn btn-main">Xem sản phẩm</a>
+  <a href="/auth/login" class="btn btn-alt">Quản lý (Admin)</a>
+</div>
+<div id="product-list" class="row mt-4">
+  <% products.forEach(p => { %>
+    <div class="col-md-4 mb-4">
+      <div class="card h-100 shadow-sm border-0">
+        <div class="product-image-center">
+          <img src="<%= p.imageUrl %>" alt="Ảnh sản phẩm">
+        </div>
+        <div class="card-body">
+          <h5 class="card-title"><%= p.name %></h5>
+          <p class="card-text"><%= p.description.substring(0, 80) %>...</p>
+          <p class="card-text fw-bold text-danger"><%= p.price.toLocaleString() %> đ</p>
+          <a href="/products/<%= p._id %>" class="btn btn-outline-primary btn-sm">Xem chi tiết</a>
+        </div>
+      </div>
+    </div>
+  <% }) %>
+</div>
+<%- include('../partials/footer') %> 
