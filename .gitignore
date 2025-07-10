@@ -115,4 +115,9 @@ nginx/ssl/
 
 # Build artifacts
 build/
-dist/ 
+dist/
+
+# Đảm bảo không ignore public static files
+!src/public/
+!src/public/css/
+!src/public/js/
