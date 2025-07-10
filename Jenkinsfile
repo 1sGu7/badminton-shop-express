@@ -86,7 +86,7 @@ EOL
             steps {
                 sh '''
                     sleep 30
-                    if curl -f http://localhost:80 >/dev/null 2>&1; then
+                    if curl -f http://localhost:3000 >/dev/null 2>&1; then
                         echo "App is running"
                     else
                         echo "Health check failed"
