@@ -1,39 +1,34 @@
-# Use Node.js LTS version
-FROM node:20-slim
+# Build stage
+FROM node:20-slim AS builder
 
-# Create app directory
 WORKDIR /app
 
-# Install app dependencies
+# Copy package files
 COPY package*.json ./
-RUN npm install
 
-# Bundle app source
+# Install dependencies (only production)
+RUN npm ci --only=production
+
+# Copy source code
 COPY . .
 
-# Set environment variables
+# Production image
+FROM node:20-slim AS prod
+WORKDIR /app
+
+# Copy only production node_modules and app code
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app .
+
 ENV NODE_ENV=production
-
-# Expose port
-EXPOSE 3000
-
-# Start the application
-CMD ["npm", "start"]
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
-
-# Copy built application from builder stage
-COPY --from=builder --chown=nodejs:nodejs /app ./
-
-# Switch to non-root user
-USER nodejs
-
-# Expose port
 EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
 
-# Start application
-CMD ["npm", "start"] 
+# Use non-root user for security
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+USER nodejs
+
+CMD ["npm", "start"]

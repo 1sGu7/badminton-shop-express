@@ -53,12 +53,6 @@ EOL
             }
         }
 
-        stage('Install Dependencies') {
-            steps {
-                sh 'npm ci --only=production'
-            }
-        }
-
         stage('Build Docker Image') {
             steps {
                 sh 'docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .'
