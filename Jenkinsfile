@@ -73,10 +73,12 @@ EOL
         stage('Deploy') {
             steps {
                 sh '''
+                    # Giới hạn RAM cho container Node.js để tránh OOM trên EC2 Free Tier
                     docker run -d \
                         --name ${DOCKER_IMAGE} \
                         -p 80:3000 \
                         --env-file .env \
+                        --memory=350m --memory-swap=350m \
                         ${DOCKER_IMAGE}:${DOCKER_TAG}
                 '''
             }
