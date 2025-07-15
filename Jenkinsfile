@@ -43,14 +43,12 @@ EOL
             }
         }
 
-        stage('Install Certbot') {
+        stage('Setup SSL Directory') {
             steps {
                 sh '''
-                    # Install Certbot if not already installed
-                    if ! command -v certbot &> /dev/null; then
-                        sudo apt-get update
-                        sudo apt-get install -y certbot python3-certbot-nginx
-                    fi
+                    # Create directories for SSL
+                    mkdir -p ssl/certbot/conf
+                    mkdir -p ssl/certbot/www
                 '''
             }
         }
@@ -58,19 +56,17 @@ EOL
         stage('Setup SSL Certificate') {
             steps {
                 sh '''
-                    # Create directory for certbot challenges
-                    sudo mkdir -p /var/www/certbot
-
-                    # Stop nginx if running to free up port 80
-                    sudo systemctl stop nginx || true
-
-                    # Request certificate (--staging for testing, remove for production)
-                    sudo certbot certonly --standalone \
-                        --non-interactive \
-                        --agree-tos \
-                        --email ${EMAIL} \
-                        --domains ${DOMAIN} \
-                        --keep-until-expiring
+                    # Run certbot in Docker
+                    docker run -it --rm \
+                    -v "${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt" \
+                    -v "${WORKSPACE}/ssl/certbot/www:/var/www/certbot" \
+                    -p 80:80 \
+                    certbot/certbot certonly \
+                    --standalone \
+                    --non-interactive \
+                    --agree-tos \
+                    --email ${EMAIL} \
+                    --domains ${DOMAIN}
                 '''
             }
         }
@@ -99,10 +95,13 @@ EOL
         stage('Deploy Application') {
             steps {
                 sh '''
+                    # Create docker network if it doesn't exist
+                    docker network create badminton-net || true
+
                     # Run Node.js application
                     docker run -d \
                         --name ${DOCKER_IMAGE} \
-                        --network host \
+                        --network badminton-net \
                         --env-file .env \
                         --memory=350m --memory-swap=350m \
                         ${DOCKER_IMAGE}:${DOCKER_TAG}
@@ -110,9 +109,11 @@ EOL
                     # Run Nginx with SSL
                     docker run -d \
                         --name nginx \
-                        --network host \
-                        -v /etc/letsencrypt:/etc/letsencrypt:ro \
-                        -v /var/www/certbot:/var/www/certbot:ro \
+                        --network badminton-net \
+                        -p 80:80 \
+                        -p 443:443 \
+                        -v ${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt:ro \
+                        -v ${WORKSPACE}/ssl/certbot/www:/var/www/certbot:ro \
                         -v ${WORKSPACE}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
                 '''
