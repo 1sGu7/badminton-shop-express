@@ -90,22 +90,13 @@ CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
         stage('Deploy & Setup HTTPS on EC2') {
             steps {
                 sh '''
-# 1. Cài đặt Nginx, Certbot nếu chưa có
 ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "sudo apt-get update && sudo apt-get install -y nginx certbot python3-certbot-nginx"
-
-# 2. Dừng, xóa container và image cũ, xóa .env cũ
 ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "docker stop ${DOCKER_IMAGE} || true && docker rm ${DOCKER_IMAGE} || true && docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true && rm -f /home/ubuntu/.env"
-
-# 3. Copy code và file cấu hình lên EC2
 scp -i ${EC2_KEY} .env ${EC2_HOST}:/home/ubuntu/.env
 scp -i ${EC2_KEY} Dockerfile ${EC2_HOST}:/home/ubuntu/Dockerfile
 scp -i ${EC2_KEY} -r src ${EC2_HOST}:/home/ubuntu/src
 scp -i ${EC2_KEY} package*.json ${EC2_HOST}:/home/ubuntu/
-
-# 4. Build và chạy lại Docker container
 ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "cd /home/ubuntu && docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} . && docker run -d --name ${DOCKER_IMAGE} -p 127.0.0.1:${PORT}:3000 --env-file .env ${DOCKER_IMAGE}:${DOCKER_TAG}"
-
-# 5. Cấu hình Nginx reverse proxy
 ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "sudo bash -c 'cat > /etc/nginx/sites-available/badminton-shop <<EOF
 server {
     listen 80;
@@ -119,8 +110,6 @@ server {
     }
 }
 EOF' && sudo ln -sf /etc/nginx/sites-available/badminton-shop /etc/nginx/sites-enabled/badminton-shop && sudo nginx -t && sudo systemctl reload nginx"
-
-# 6. Cấp SSL Let's Encrypt
 ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "sudo certbot --nginx --non-interactive --agree-tos --redirect -d ${DOMAIN} -m ${EMAIL} && sudo systemctl reload nginx"
                 '''
             }
