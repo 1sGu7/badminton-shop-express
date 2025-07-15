@@ -17,16 +17,22 @@ pipeline {
     }
 
     stages {
-        stage('Cleanup') {
+        stage('Initial Cleanup') {
             steps {
                 sh '''
-                    # Dọn dẹp để giải phóng tài nguyên
+                    # Dọn dẹp containers cũ
+                    docker ps -q | xargs -r docker stop
+                    docker ps -aq | xargs -r docker rm
                     docker system prune -af || true
-                    docker volume prune -f || true
-                    rm -rf ${WORKSPACE}/ssl/* || true
-
-                    # Kill tất cả process đang sử dụng port 80 và 443
-                    sudo lsof -ti:80,443 | xargs -r kill -9 || true
+                    
+                    # Dọn workspace
+                    rm -rf ${WORKSPACE}/ssl
+                    mkdir -p ${WORKSPACE}/ssl/certbot/www/.well-known/acme-challenge
+                    mkdir -p ${WORKSPACE}/ssl/certbot/conf
+                    
+                    # Tạo test file
+                    echo "acme challenge test" > ${WORKSPACE}/ssl/certbot/www/.well-known/acme-challenge/test.txt
+                    chmod -R 755 ${WORKSPACE}/ssl
                 '''
             }
         }
@@ -38,73 +44,57 @@ pipeline {
             }
         }
 
-        stage('Create .env file') {
+        stage('Setup HTTP Server') {
             steps {
                 script {
                     sh '''
-cat > .env <<EOL
-PORT=${PORT}
-NODE_ENV=${NODE_ENV}
-MONGODB_URI=${MONGODB_URI}
-JWT_SECRET=${JWT_SECRET}
-SESSION_SECRET=${SESSION_SECRET}
-CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
-CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
-CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
-EOL
+                        # Tạo nginx config tạm thời
+                        cat > ${WORKSPACE}/nginx-temp.conf <<-EOF
+events {
+    worker_connections 512;
+}
+http {
+    server {
+        listen 80;
+        server_name ${DOMAIN};
+        
+        location ^~ /.well-known/acme-challenge/ {
+            root /usr/share/nginx/html;
+            default_type text/plain;
+            allow all;
+        }
+        
+        location = /.well-known/acme-challenge/ {
+            return 404;
+        }
+        
+        location / {
+            return 200 "Waiting for SSL setup...";
+        }
+    }
+}
+EOF
+                        
+                        # Chạy nginx tạm thời
+                        docker run -d \
+                            --name nginx-temp \
+                            -p 80:80 \
+                            -v ${WORKSPACE}/ssl/certbot/www:/usr/share/nginx/html \
+                            -v ${WORKSPACE}/nginx-temp.conf:/etc/nginx/nginx.conf:ro \
+                            nginx:alpine
+
+                        # Kiểm tra nginx đã chạy chưa
+                        sleep 5
+                        curl -v http://${DOMAIN}/.well-known/acme-challenge/test.txt
                     '''
                 }
             }
         }
 
-        stage('Check Domain') {
+        stage('Get SSL Certificate') {
             steps {
                 sh '''
-                    # Kiểm tra DNS record
-                    echo "Checking DNS for ${DOMAIN}..."
-                    host ${DOMAIN} || echo "Warning: DNS not configured yet"
-                    
-                    # Kiểm tra port 80
-                    echo "Checking if port 80 is available..."
-                    if lsof -i:80; then
-                        echo "Port 80 is in use. Attempting to free it..."
-                        sudo lsof -ti:80 | xargs -r kill -9
-                    fi
-                    
-                    # Đợi port được giải phóng
-                    sleep 5
-                '''
-            }
-        }
-
-        stage('Setup SSL Directory') {
-            steps {
-                sh '''
-                    mkdir -p ${WORKSPACE}/ssl/certbot/conf
-                    mkdir -p ${WORKSPACE}/ssl/certbot/www
-                    chmod -R 755 ${WORKSPACE}/ssl
-                '''
-            }
-        }
-
-        stage('Setup SSL Certificate') {
-            steps {
-                sh '''
-                    # Dừng tất cả container đang chạy
-                    docker ps -q | xargs -r docker stop
-                    docker ps -aq | xargs -r docker rm
-                    
-                    # Chạy nginx tạm thời để xác thực certbot
-                    docker run -d \
-                        --name nginx-temp \
-                        -v ${WORKSPACE}/ssl/certbot/www:/usr/share/nginx/html/.well-known/acme-challenge \
-                        -p 80:80 \
-                        nginx:alpine
-
-                    # Đợi nginx khởi động
-                    sleep 5
-                    
-                    # Chạy certbot
+                    # Chạy certbot để lấy certificate
                     docker run --rm \
                         -v ${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt \
                         -v ${WORKSPACE}/ssl/certbot/www:/var/www/certbot \
@@ -115,26 +105,40 @@ EOL
                         --agree-tos \
                         --email ${EMAIL} \
                         --domains ${DOMAIN} \
-                        --keep-until-expiring \
-                        --staging
-
-                    # Dừng nginx tạm thời
-                    docker stop nginx-temp
-                    docker rm nginx-temp
+                        --staging \
+                        --verbose \
+                        --debug
+                        
+                    # Kiểm tra certificate đã được tạo chưa
+                    ls -la ${WORKSPACE}/ssl/certbot/conf/live/${DOMAIN} || echo "Certificate not generated"
                 '''
             }
         }
 
-        stage('Build and Deploy') {
+        stage('Deploy Application') {
             steps {
                 sh '''
-                    # Build với resource limits
-                    docker build --memory=512m --memory-swap=512m -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
+                    # Dừng nginx tạm thời
+                    docker stop nginx-temp
+                    docker rm nginx-temp
 
-                    # Tạo network nếu chưa tồn tại
+                    # Tạo .env file
+                    cat > .env <<EOL
+PORT=${PORT}
+NODE_ENV=${NODE_ENV}
+MONGODB_URI=${MONGODB_URI}
+JWT_SECRET=${JWT_SECRET}
+SESSION_SECRET=${SESSION_SECRET}
+CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+EOL
+
+                    # Tạo network
                     docker network create badminton-net || true
 
-                    # Chạy ứng dụng với resource limits
+                    # Build và chạy application
+                    docker build --memory=512m --memory-swap=512m -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
                     docker run -d \
                         --name ${DOCKER_IMAGE} \
                         --network badminton-net \
@@ -144,7 +148,7 @@ EOL
                         --env-file .env \
                         ${DOCKER_IMAGE}:${DOCKER_TAG}
 
-                    # Chạy Nginx với resource limits
+                    # Chạy nginx với SSL
                     docker run -d \
                         --name nginx \
                         --network badminton-net \
@@ -165,19 +169,25 @@ EOL
             steps {
                 sh '''
                     # Đợi services khởi động
-                    sleep 15
+                    sleep 10
                     
-                    # Kiểm tra certificates
-                    ls -la ${WORKSPACE}/ssl/certbot/conf/live/${DOMAIN} || echo "Certificates not found"
+                    # Kiểm tra logs
+                    echo "=== Application Logs ==="
+                    docker logs ${DOCKER_IMAGE}
                     
-                    # Kiểm tra container logs
-                    docker logs ${DOCKER_IMAGE} 2>&1 | tail -n 10
-                    docker logs nginx 2>&1 | tail -n 10
+                    echo "=== Nginx Logs ==="
+                    docker logs nginx
                     
                     # Test endpoints
-                    curl -I http://${DOMAIN} || echo "HTTP endpoint not ready"
-                    sleep 5
-                    curl -k -I https://${DOMAIN} || echo "HTTPS endpoint not ready"
+                    echo "=== Testing HTTP ==="
+                    curl -v http://${DOMAIN}
+                    
+                    echo "=== Testing HTTPS ==="
+                    curl -k -v https://${DOMAIN} || echo "HTTPS not ready yet"
+                    
+                    # Kiểm tra certificate
+                    echo "=== SSL Certificate Info ==="
+                    echo | openssl s_client -showcerts -servername ${DOMAIN} -connect ${DOMAIN}:443 2>/dev/null | openssl x509 -inform pem -noout -text || echo "Certificate not accessible"
                 '''
             }
         }
@@ -186,24 +196,28 @@ EOL
     post {
         always {
             sh '''
-                # Cleanup
-                docker image prune -f
-                docker container prune -f
-                
                 # Lưu logs để debug
                 mkdir -p ${WORKSPACE}/logs
                 docker logs ${DOCKER_IMAGE} > ${WORKSPACE}/logs/app.log 2>&1 || true
                 docker logs nginx > ${WORKSPACE}/logs/nginx.log 2>&1 || true
+                
+                # Lưu nginx config đang sử dụng
+                docker cp nginx:/etc/nginx/nginx.conf ${WORKSPACE}/logs/nginx.conf || true
+                
+                # Lưu thông tin certbot
+                cp -r ${WORKSPACE}/ssl/certbot/conf/live/${DOMAIN}/* ${WORKSPACE}/logs/ || true
             '''
         }
-        success {
-            echo 'Deployment completed successfully!'
-        }
         failure {
-            echo 'Deployment failed!'
             sh '''
-                # Show error logs
-                tail -n 50 ${WORKSPACE}/logs/app.log || true
+                echo "=== Debug Information ==="
+                echo "Docker containers:"
+                docker ps -a
+                echo "Port usage:"
+                netstat -tulpn || true
+                echo "Certificate files:"
+                ls -la ${WORKSPACE}/ssl/certbot/conf/live/${DOMAIN} || true
+                echo "Nginx error log:"
                 tail -n 50 ${WORKSPACE}/logs/nginx.log || true
             '''
         }
