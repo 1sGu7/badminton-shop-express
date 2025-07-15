@@ -89,29 +89,32 @@ CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
 
         stage('Deploy & Setup HTTPS on EC2') {
             steps {
-                sh '''
-ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "sudo apt-get update && sudo apt-get install -y nginx certbot python3-certbot-nginx"
-ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "docker stop ${DOCKER_IMAGE} || true && docker rm ${DOCKER_IMAGE} || true && docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true && rm -f /home/ubuntu/.env"
-scp -i ${EC2_KEY} .env ${EC2_HOST}:/home/ubuntu/.env
-scp -i ${EC2_KEY} Dockerfile ${EC2_HOST}:/home/ubuntu/Dockerfile
-scp -i ${EC2_KEY} -r src ${EC2_HOST}:/home/ubuntu/src
-scp -i ${EC2_KEY} package*.json ${EC2_HOST}:/home/ubuntu/
-ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "cd /home/ubuntu && docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} . && docker run -d --name ${DOCKER_IMAGE} -p 127.0.0.1:${PORT}:3000 --env-file .env ${DOCKER_IMAGE}:${DOCKER_TAG}"
-ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "sudo bash -c 'cat > /etc/nginx/sites-available/badminton-shop <<EOF
-server {
-    listen 80;
-    server_name ${DOMAIN};
-    location / {
-        proxy_pass http://localhost:${PORT};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF' && sudo ln -sf /etc/nginx/sites-available/badminton-shop /etc/nginx/sites-enabled/badminton-shop && sudo nginx -t && sudo systemctl reload nginx"
-ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "sudo certbot --nginx --non-interactive --agree-tos --redirect -d ${DOMAIN} -m ${EMAIL} && sudo systemctl reload nginx"
-                '''
+                script {
+                    // 1. Pull docker images for needed tools (nginx, certbot, alpine/scp, alpine/ssh)
+                    sh """
+docker pull alpine:latest
+docker pull alpine/ssh:latest
+docker pull alpine/scp:latest
+docker pull nginx:latest
+docker pull certbot/certbot:latest
+"""
+                    // 2. Copy files to EC2 using dockerized scp
+                    sh """
+docker run --rm -v $PWD:/work -v ${EC2_KEY}:${EC2_KEY} alpine/scp -i ${EC2_KEY} .env ${EC2_HOST}:/home/ubuntu/.env
+docker run --rm -v $PWD:/work -v ${EC2_KEY}:${EC2_KEY} alpine/scp -i ${EC2_KEY} Dockerfile ${EC2_HOST}:/home/ubuntu/Dockerfile
+docker run --rm -v $PWD:/work -v ${EC2_KEY}:${EC2_KEY} alpine/scp -i ${EC2_KEY} -r src ${EC2_HOST}:/home/ubuntu/src
+docker run --rm -v $PWD:/work -v ${EC2_KEY}:${EC2_KEY} alpine/scp -i ${EC2_KEY} package*.json ${EC2_HOST}:/home/ubuntu/
+"""
+                    // 3. SSH to EC2 and run commands using dockerized ssh
+                    sh """
+docker run --rm -v ${EC2_KEY}:${EC2_KEY} alpine/ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} 'sudo apt-get update && sudo apt-get install -y nginx certbot python3-certbot-nginx'
+docker run --rm -v ${EC2_KEY}:${EC2_KEY} alpine/ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} 'docker stop ${DOCKER_IMAGE} || true && docker rm ${DOCKER_IMAGE} || true && docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true && rm -f /home/ubuntu/.env'
+docker run --rm -v ${EC2_KEY}:${EC2_KEY} alpine/ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} 'cd /home/ubuntu && docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} . && docker run -d --name ${DOCKER_IMAGE} -p 127.0.0.1:${PORT}:3000 --env-file .env ${DOCKER_IMAGE}:${DOCKER_TAG}'
+docker run --rm -v ${EC2_KEY}:${EC2_KEY} alpine/ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} "sudo bash -c 'cat > /etc/nginx/sites-available/badminton-shop <<EOF\nserver {\n    listen 80;\n    server_name ${DOMAIN};\n    location / {\n        proxy_pass http://localhost:${PORT};\n        proxy_set_header Host \\$host;\n        proxy_set_header X-Real-IP \\$remote_addr;\n        proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto \\$scheme;\n    }\n}\nEOF' && sudo ln -sf /etc/nginx/sites-available/badminton-shop /etc/nginx/sites-enabled/badminton-shop && sudo nginx -t && sudo systemctl reload nginx"
+docker run --rm -v ${EC2_KEY}:${EC2_KEY} alpine/ssh -o StrictHostKeyChecking=no -i ${EC2_KEY} ${EC2_HOST} 'sudo certbot --nginx --non-interactive --agree-tos --redirect -d ${DOMAIN} -m ${EMAIL} && sudo systemctl reload nginx'
+"""
+                }
+            }
             }
         }
     }
