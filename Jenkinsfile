@@ -25,47 +25,6 @@ pipeline {
         stage('Create .env file') {
             steps {
                 script {
-                    sh '''
-cat > .env <<EOL
-PORT=${PORT}
-NODE_ENV=${NODE_ENV}
-MONGODB_URI=${MONGODB_URI}
-JWT_SECRET=${JWT_SECRET}
-SESSION_SECRET=${SESSION_SECRET}
-CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
-CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
-CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
-pipeline {
-    agent any
-
-    environment {
-        DOCKER_IMAGE = 'badminton-shop'
-        DOCKER_TAG = 'latest'
-        PORT = '3000'
-        NODE_ENV = 'production'
-        MONGODB_URI = credentials('MONGODB_URI')
-        JWT_SECRET = credentials('JWT_SECRET')
-        SESSION_SECRET = credentials('SESSION_SECRET')
-        CLOUDINARY_CLOUD_NAME = credentials('CLOUDINARY_CLOUD_NAME')
-        CLOUDINARY_API_KEY = credentials('CLOUDINARY_API_KEY')
-        CLOUDINARY_API_SECRET = credentials('CLOUDINARY_API_SECRET')
-        EC2_HOST = credentials('EC2_HOST')
-        EC2_KEY = credentials('EC2_KEY')
-        DOMAIN = credentials('DOMAIN')
-        EMAIL = credentials('EMAIL')
-    }
-
-    stages {
-        stage('Checkout') {
-            steps {
-                cleanWs()
-                checkout scm
-            }
-        }
-
-        stage('Create .env file') {
-            steps {
-                script {
                     def envContent = """
 PORT=${PORT}
 NODE_ENV=${NODE_ENV}
