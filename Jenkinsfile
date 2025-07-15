@@ -81,6 +81,7 @@ docker run --rm -v ${EC2_KEY}:${EC2_KEY} alpine/ssh -o StrictHostKeyChecking=no 
             }
         }
     }
+    }
     post {
         success {
             echo 'Pipeline executed successfully!'
