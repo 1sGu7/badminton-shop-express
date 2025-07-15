@@ -57,12 +57,12 @@ pipeline {
         stage('Setup ACME Challenge') {
             steps {
                 sh '''
-                    # Create test file
+                    # Create ACME challenge directory and test file
                     mkdir -p ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge
                     echo "acme challenge test" > ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
                     chmod -R 755 ${WORKSPACE_SSL}/certbot/www
-                    
-                    # Create minimal nginx config
+
+                    # Create Nginx configuration for ACME challenge
                     cat > ${WORKSPACE}/nginx-acme.conf <<-EOF
 events {
     worker_connections 512;
@@ -72,9 +72,9 @@ http {
     default_type  application/octet-stream;
 
     server {
-        listen 80;
-        listen [::]:80;
-        server_name ${DOMAIN};
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        server_name _;
         
         root /usr/share/nginx/html;
         
@@ -94,41 +94,41 @@ http {
     }
 }
 EOF
-                    
+
                     # Create empty directory to override conf.d
                     mkdir -p ${WORKSPACE}/empty-dir
-                    
-                    # Validate nginx config before starting
+
+                    # Validate Nginx configuration
                     echo "Validating nginx configuration..."
-                    docker run --rm \
-                        -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
-                        nginx:alpine nginx -t
-                    
-                    # Start nginx for ACME challenge
-                    docker run -d \
-                        --name nginx-acme \
-                        --restart unless-stopped \
-                        -p 80:80 \
+                    docker run --rm -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro nginx:alpine nginx -t
+
+                    # Start Nginx for ACME challenge
+                    docker run -d --name nginx-acme --restart unless-stopped -p 80:80 \
                         -v ${WORKSPACE_SSL}/certbot/www:/usr/share/nginx/html \
                         -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
                         -v ${WORKSPACE}/empty-dir:/etc/nginx/conf.d:ro \
                         nginx:alpine
 
-                    # Wait for nginx to start
+                    # Wait for Nginx to start
                     echo "Waiting for nginx to start..."
                     sleep 10
 
-                    # Verify nginx is running and test file is accessible
+                    # Test Nginx configuration
                     echo "Testing nginx configuration..."
                     docker exec nginx-acme nginx -t
-                    
+
+                    # Verify test file
+                    echo "Verifying test file..."
+                    ls -la ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
+                    cat ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
+
+                    # Test local and domain access
                     echo "Testing local access..."
                     curl -v http://localhost/.well-known/acme-challenge/test.txt
-                    
                     echo "Testing domain access..."
-                    curl -v http://${DOMAIN}/.well-known/acme-challenge/test.txt
-                    
-                    # Show nginx logs
+                    curl -v http://www.phgbao.id.vn/.well-known/acme-challenge/test.txt
+
+                    # Show Nginx logs
                     echo "Nginx logs:"
                     docker logs nginx-acme
                 '''
@@ -138,7 +138,7 @@ EOF
         stage('Verify DNS') {
             steps {
                 sh '''
-                    # Get instance public IP using eth0 interface
+                    # Get instance public IP
                     EC2_IP=$(curl -s https://api.ipify.org)
                     echo "EC2 Public IP: $EC2_IP"
                     
@@ -147,59 +147,31 @@ EOF
                     DOMAIN_IP=$(dig +short ${DOMAIN} A)
                     echo "Domain A record resolves to: $DOMAIN_IP"
                     
-                    # Verify exact match with EC2 IP
+                    # Verify match with EC2 IP
                     if [ "$EC2_IP" = "$DOMAIN_IP" ]; then
                         echo "DNS A record matches EC2 IP ✓"
                     else
                         echo "Warning: Domain ${DOMAIN} A record ($DOMAIN_IP) does not match EC2 IP ($EC2_IP)"
-                        
-                        # Try secondary IP check
-                        SECONDARY_IP=$(curl -s http://checkip.amazonaws.com)
-                        echo "Secondary IP check: $SECONDARY_IP"
-                        
-                        if [ "$SECONDARY_IP" = "$DOMAIN_IP" ]; then
-                            echo "DNS A record matches secondary IP check ✓"
-                        else
-                            echo "Please update DNS A record for ${DOMAIN} to point to $EC2_IP"
-                            exit 1
-                        fi
+                        exit 1
                     fi
                     
-                    # Test DNS propagation with multiple nameservers
+                    # Test DNS propagation
                     echo "Testing DNS propagation..."
                     NAMESERVERS="8.8.8.8 1.1.1.1 208.67.222.222"
                     for ns in $NAMESERVERS; do
-                        echo "Checking with nameserver $ns..."
+                        echo "
+
+Checking with nameserver $ns..."
                         RESOLVED_IP=$(dig @$ns +short ${DOMAIN} A)
                         if [ "$RESOLVED_IP" = "$DOMAIN_IP" ]; then
                             echo "DNS propagated to $ns ✓"
                         else
                             echo "Warning: DNS not yet propagated to $ns"
-                            echo "Got $RESOLVED_IP, expected $DOMAIN_IP"
-                            echo "Waiting for propagation..."
-                            sleep 30
-                            # Check one more time
-                            RESOLVED_IP=$(dig @$ns +short ${DOMAIN} A)
-                            if [ "$RESOLVED_IP" = "$DOMAIN_IP" ]; then
-                                echo "DNS now propagated to $ns ✓"
-                            else
-                                echo "DNS failed to propagate to $ns after waiting"
-                                exit 1
-                            fi
+                            exit 1
                         fi
                     done
                     
                     echo "All DNS checks passed! ✓"
-                    
-                    # Additional verification
-                    echo "Running final connectivity test..."
-                    if curl -f -s -m 10 http://${DOMAIN}/.well-known/acme-challenge/test.txt > /dev/null; then
-                        echo "Web server connectivity test passed ✓"
-                    else
-                        echo "Warning: Could not access test file via domain name"
-                        echo "Please check your web server configuration and firewall rules"
-                        exit 1
-                    fi
                 '''
             }
         }
@@ -207,41 +179,23 @@ EOF
         stage('Get SSL Certificate') {
             steps {
                 sh '''
-                    # Prepare certbot command - FIX: Removed extra "certbot"
-                    CERTBOT_CMD="certonly --webroot -w /var/www/certbot"
-                    CERTBOT_CMD="$CERTBOT_CMD --non-interactive --agree-tos"
-                    CERTBOT_CMD="$CERTBOT_CMD --email ${EMAIL} --domains ${DOMAIN}"
-                    CERTBOT_CMD="$CERTBOT_CMD --staging --debug --verbose"
+                    # Prepare Certbot command
+                    CERTBOT_CMD="certonly --webroot -w /var/www/certbot --non-interactive --agree-tos --email ${EMAIL} --domains ${DOMAIN} --staging --debug --verbose"
                     
-                    # Clean any previous certbot data
+                    # Clean previous Certbot data
                     rm -rf ${WORKSPACE_SSL}/certbot/conf/*
                     
-                    echo "Starting certbot with staging..."
-                    docker run --rm \
-                        -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
-                        -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
-                        certbot/certbot $CERTBOT_CMD
-                        
+                    echo "Starting Certbot with staging..."
+                    docker run --rm -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot certbot/certbot $CERTBOT_CMD
+                    
                     # If staging succeeds, try production
                     if [ $? -eq 0 ]; then
                         echo "Staging certificate obtained successfully. Trying production..."
                         # Clean staging certificates
-                        rm -rf ${WORKSPACE_SSL}/certbot/conf/*
+                        rmŹ -rf ${WORKSPACE_SSL}/certbot/conf/*
                         
-                        # Run certbot without staging
-                        docker run --rm \
-                            -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
-                            -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
-                            certbot/certbot \
-                            certonly --webroot \
-                            --webroot-path=/var/www/certbot \
-                            --non-interactive \
-                            --agree-tos \
-                            --email ${EMAIL} \
-                            --domains ${DOMAIN} \
-                            --force-renewal \
-                            --debug \
-                            --verbose
+                        # Run Certbot for production
+                        docker run --rm -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot certbot/certbot certonly --webroot --webroot-path=/var/www/certbot --non-interactive --agree-tos --email ${EMAIL} --domains ${DOMAIN} --force-renewal --debug --verbose
                     fi
                     
                     # Verify certificate files
@@ -254,7 +208,7 @@ EOF
         stage('Deploy Application') {
             steps {
                 sh '''
-                    # Stop ACME nginx
+                    # Stop ACME Nginx
                     docker stop nginx-acme
                     docker rm nginx-acme
 
@@ -275,38 +229,18 @@ EOL
 
                     # Deploy application
                     docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
-                    docker run -d \
-                        --name ${DOCKER_IMAGE} \
-                        --network badminton-net \
-                        --memory=200m \
-                        --memory-swap=200m \
-                        --cpus=0.3 \
-                        --restart unless-stopped \
-                        --env-file .env \
-                        ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    docker run -d --name ${DOCKER_IMAGE} --network badminton-net --memory=200m --memory-swap=200m --cpus=0.3 --restart unless-stopped --env-file .env ${DOCKER_IMAGE}:${DOCKER_TAG}
 
-                    # Deploy nginx with SSL
-                    docker run -d \
-                        --name nginx \
-                        --network badminton-net \
-                        --memory=128m \
-                        --memory-swap=128m \
-                        --cpus=0.2 \
-                        --restart unless-stopped \
-                        -p 80:80 \
-                        -p 443:443 \
-                        -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt:ro \
-                        -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot:ro \
-                        -v ${WORKSPACE}/nginx.conf:/etc/nginx/nginx.conf:ro \
-                        nginx:alpine
+                    # Deploy Nginx with SSL
+                    docker run -d --name nginx --network badminton-net --memory=128m --memory-swap=128m --cpus=0.2 --restart unless-stopped -p 80:80 -p 443:443 -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt:ro -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot:ro -v ${WORKSPACE}/nginx.conf:/etc/nginx/nginx.conf:ro nginx:alpine
 
                     # Verify deployment
                     sleep 10
                     echo "Checking containers..."
                     docker ps
                     echo "Checking application logs..."
-                    docker logs ${DOCKER_IMAGE}
-                    echo "Checking nginx logs..."
+                    docker logs presumably ${DOCKER_IMAGE}
+                    echo "Checking Nginx logs..."
                     docker logs nginx
                 '''
             }
