@@ -104,8 +104,8 @@ EOF
         stage('Verify DNS') {
             steps {
                 sh '''
-                    # Get instance public IP
-                    EC2_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+                    # Get instance public IP using eth0 interface
+                    EC2_IP=$(curl -s https://api.ipify.org)
                     echo "EC2 Public IP: $EC2_IP"
                     
                     # Verify DNS A record
@@ -118,19 +118,17 @@ EOF
                         echo "DNS A record matches EC2 IP ✓"
                     else
                         echo "Warning: Domain ${DOMAIN} A record ($DOMAIN_IP) does not match EC2 IP ($EC2_IP)"
-                        echo "Please update DNS A record for ${DOMAIN} to point to $EC2_IP"
-                        exit 1
-                    fi
-                    
-                    # Check for AAAA record (IPv6)
-                    echo "Checking for AAAA records..."
-                    if dig +short ${DOMAIN} AAAA | grep -q .; then
-                        echo "Warning: AAAA (IPv6) record exists for ${DOMAIN}"
-                        echo "This might interfere with Let's Encrypt verification"
-                        echo "Consider removing AAAA record temporarily"
-                        exit 1
-                    else
-                        echo "No AAAA record found (this is good for now) ✓"
+                        
+                        # Try secondary IP check
+                        SECONDARY_IP=$(curl -s http://checkip.amazonaws.com)
+                        echo "Secondary IP check: $SECONDARY_IP"
+                        
+                        if [ "$SECONDARY_IP" = "$DOMAIN_IP" ]; then
+                            echo "DNS A record matches secondary IP check ✓"
+                        else
+                            echo "Please update DNS A record for ${DOMAIN} to point to $EC2_IP"
+                            exit 1
+                        fi
                     fi
                     
                     # Test DNS propagation with multiple nameservers
@@ -138,14 +136,17 @@ EOF
                     NAMESERVERS="8.8.8.8 1.1.1.1 208.67.222.222"
                     for ns in $NAMESERVERS; do
                         echo "Checking with nameserver $ns..."
-                        if dig @$ns +short ${DOMAIN} A | grep -q "^$EC2_IP$"; then
+                        RESOLVED_IP=$(dig @$ns +short ${DOMAIN} A)
+                        if [ "$RESOLVED_IP" = "$DOMAIN_IP" ]; then
                             echo "DNS propagated to $ns ✓"
                         else
                             echo "Warning: DNS not yet propagated to $ns"
+                            echo "Got $RESOLVED_IP, expected $DOMAIN_IP"
                             echo "Waiting for propagation..."
                             sleep 30
                             # Check one more time
-                            if dig @$ns +short ${DOMAIN} A | grep -q "^$EC2_IP$"; then
+                            RESOLVED_IP=$(dig @$ns +short ${DOMAIN} A)
+                            if [ "$RESOLVED_IP" = "$DOMAIN_IP" ]; then
                                 echo "DNS now propagated to $ns ✓"
                             else
                                 echo "DNS failed to propagate to $ns after waiting"
@@ -155,6 +156,16 @@ EOF
                     done
                     
                     echo "All DNS checks passed! ✓"
+                    
+                    # Additional verification
+                    echo "Running final connectivity test..."
+                    if curl -f -s -m 10 http://${DOMAIN}/.well-known/acme-challenge/test.txt > /dev/null; then
+                        echo "Web server connectivity test passed ✓"
+                    else
+                        echo "Warning: Could not access test file via domain name"
+                        echo "Please check your web server configuration and firewall rules"
+                        exit 1
+                    fi
                 '''
             }
         }
