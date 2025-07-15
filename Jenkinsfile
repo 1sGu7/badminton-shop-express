@@ -101,10 +101,68 @@ EOF
             }
         }
 
+        stage('Verify DNS') {
+            steps {
+                sh '''
+                    # Get instance public IP
+                    EC2_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+                    echo "EC2 Public IP: $EC2_IP"
+                    
+                    # Verify DNS A record
+                    echo "Checking DNS A record for ${DOMAIN}..."
+                    DOMAIN_IP=$(dig +short ${DOMAIN} A)
+                    echo "Domain A record resolves to: $DOMAIN_IP"
+                    
+                    # Verify exact match with EC2 IP
+                    if [ "$EC2_IP" = "$DOMAIN_IP" ]; then
+                        echo "DNS A record matches EC2 IP ✓"
+                    else
+                        echo "Warning: Domain ${DOMAIN} A record ($DOMAIN_IP) does not match EC2 IP ($EC2_IP)"
+                        echo "Please update DNS A record for ${DOMAIN} to point to $EC2_IP"
+                        exit 1
+                    fi
+                    
+                    # Check for AAAA record (IPv6)
+                    echo "Checking for AAAA records..."
+                    if dig +short ${DOMAIN} AAAA | grep -q .; then
+                        echo "Warning: AAAA (IPv6) record exists for ${DOMAIN}"
+                        echo "This might interfere with Let's Encrypt verification"
+                        echo "Consider removing AAAA record temporarily"
+                        exit 1
+                    else
+                        echo "No AAAA record found (this is good for now) ✓"
+                    fi
+                    
+                    # Test DNS propagation with multiple nameservers
+                    echo "Testing DNS propagation..."
+                    NAMESERVERS="8.8.8.8 1.1.1.1 208.67.222.222"
+                    for ns in $NAMESERVERS; do
+                        echo "Checking with nameserver $ns..."
+                        if dig @$ns +short ${DOMAIN} A | grep -q "^$EC2_IP$"; then
+                            echo "DNS propagated to $ns ✓"
+                        else
+                            echo "Warning: DNS not yet propagated to $ns"
+                            echo "Waiting for propagation..."
+                            sleep 30
+                            # Check one more time
+                            if dig @$ns +short ${DOMAIN} A | grep -q "^$EC2_IP$"; then
+                                echo "DNS now propagated to $ns ✓"
+                            else
+                                echo "DNS failed to propagate to $ns after waiting"
+                                exit 1
+                            fi
+                        fi
+                    done
+                    
+                    echo "All DNS checks passed! ✓"
+                '''
+            }
+        }
+
         stage('Get SSL Certificate') {
             steps {
                 sh '''
-                    # Run certbot
+                    # Run certbot with staging first
                     docker run --rm \
                         -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
                         -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
@@ -118,6 +176,24 @@ EOF
                         --staging \
                         --debug \
                         --verbose
+                        
+                    # If staging succeeds, try production
+                    if [ $? -eq 0 ]; then
+                        echo "Staging certificate obtained successfully. Trying production..."
+                        docker run --rm \
+                            -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
+                            -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
+                            certbot/certbot certonly \
+                            --webroot \
+                            --webroot-path=/var/www/certbot \
+                            --non-interactive \
+                            --agree-tos \
+                            --email ${EMAIL} \
+                            --domains ${DOMAIN} \
+                            --force-renewal \
+                            --debug \
+                            --verbose
+                    fi
                     
                     # Verify certificate files
                     ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN} || echo "Certificate not generated"
