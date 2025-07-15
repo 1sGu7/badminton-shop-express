@@ -21,23 +21,13 @@ pipeline {
         stage('Prepare Workspace') {
             steps {
                 script {
-                    // Cleanup workspace
                     cleanWs()
                     checkout scm
-                    
-                    // Setup SSL directory with correct permissions
                     sh '''
-                        # Remove old SSL directory if exists
                         rm -rf ${WORKSPACE_SSL} || true
-                        
-                        # Create required directories
                         mkdir -p ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge
                         mkdir -p ${WORKSPACE_SSL}/certbot/conf
-                        
-                        # Set permissions
                         chmod -R 755 ${WORKSPACE_SSL}
-                        
-                        # Verify setup
                         ls -la ${WORKSPACE_SSL}
                     '''
                 }
@@ -57,13 +47,11 @@ pipeline {
         stage('Setup ACME Challenge') {
             steps {
                 sh '''
-                    # Create test file
                     mkdir -p ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge
                     echo "acme challenge test" > ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
                     chmod -R 755 ${WORKSPACE_SSL}/certbot/www
-                    
-                    # Create minimal nginx config - FIX: Corrected try_files directive
-                    cat > ${WORKSPACE}/nginx-acme.conf <<-EOF
+
+                    cat > ${WORKSPACE}/nginx-acme.conf <<EOF
 events {
     worker_connections 512;
 }
@@ -75,57 +63,48 @@ http {
         listen 80;
         listen [::]:80;
         server_name ${DOMAIN};
-        
+
         root /usr/share/nginx/html;
-        
+
         location /.well-known/acme-challenge/ {
             allow all;
-            default_type text/plain;
-            # FIX: Corrected try_files syntax
-            try_files \$uri \$uri/ =404;
+            default_type "text/plain";
+            try_files \$uri =404;
         }
-        
+
         location / {
             return 200 "ACME Challenge Server Running\\n";
             add_header Content-Type text/plain;
         }
-        
+
         access_log /dev/stdout;
         error_log /dev/stdout info;
     }
 }
 EOF
-                    
-                    # Validate nginx config before starting
+
                     echo "Validating nginx configuration..."
                     docker run --rm \
                         -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine nginx -t
-                    
-                    # Start nginx for ACME challenge
-                    docker run -d \
-                        --name nginx-acme \
-                        --restart unless-stopped \
-                        -p 80:80 \
+
+                    docker run -d --name nginx-acme --restart unless-stopped -p 80:80 \
                         -v ${WORKSPACE_SSL}/certbot/www:/usr/share/nginx/html \
                         -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
 
-                    # Wait for nginx to start
                     echo "Waiting for nginx to start..."
                     sleep 10
 
-                    # Verify nginx is running and test file is accessible
                     echo "Testing nginx configuration..."
                     docker exec nginx-acme nginx -t
-                    
+
                     echo "Testing local access..."
                     curl -v http://localhost/.well-known/acme-challenge/test.txt
-                    
+
                     echo "Testing domain access..."
                     curl -v http://${DOMAIN}/.well-known/acme-challenge/test.txt
-                    
-                    # Show nginx logs
+
                     echo "Nginx logs:"
                     docker logs nginx-acme
                 '''
@@ -135,66 +114,51 @@ EOF
         stage('Verify DNS') {
             steps {
                 sh '''
-                    # Get instance public IP using eth0 interface
                     EC2_IP=$(curl -s https://api.ipify.org)
                     echo "EC2 Public IP: $EC2_IP"
-                    
-                    # Verify DNS A record
+
                     echo "Checking DNS A record for ${DOMAIN}..."
                     DOMAIN_IP=$(dig +short ${DOMAIN} A)
                     echo "Domain A record resolves to: $DOMAIN_IP"
-                    
-                    # Verify exact match with EC2 IP
-                    if [ "$EC2_IP" = "$DOMAIN_IP" ]; then
-                        echo "DNS A record matches EC2 IP ✓"
-                    else
+
+                    if [ "$EC2_IP" != "$DOMAIN_IP" ]; then
                         echo "Warning: Domain ${DOMAIN} A record ($DOMAIN_IP) does not match EC2 IP ($EC2_IP)"
-                        
-                        # Try secondary IP check
                         SECONDARY_IP=$(curl -s http://checkip.amazonaws.com)
                         echo "Secondary IP check: $SECONDARY_IP"
-                        
-                        if [ "$SECONDARY_IP" = "$DOMAIN_IP" ]; then
-                            echo "DNS A record matches secondary IP check ✓"
-                        else
+                        if [ "$SECONDARY_IP" != "$DOMAIN_IP" ]; then
                             echo "Please update DNS A record for ${DOMAIN} to point to $EC2_IP"
                             exit 1
                         fi
+                    else
+                        echo "DNS A record matches EC2 IP ✓"
                     fi
-                    
-                    # Test DNS propagation with multiple nameservers
+
                     echo "Testing DNS propagation..."
                     NAMESERVERS="8.8.8.8 1.1.1.1 208.67.222.222"
                     for ns in $NAMESERVERS; do
                         echo "Checking with nameserver $ns..."
                         RESOLVED_IP=$(dig @$ns +short ${DOMAIN} A)
-                        if [ "$RESOLVED_IP" = "$DOMAIN_IP" ]; then
-                            echo "DNS propagated to $ns ✓"
-                        else
+                        if [ "$RESOLVED_IP" != "$DOMAIN_IP" ]; then
                             echo "Warning: DNS not yet propagated to $ns"
                             echo "Got $RESOLVED_IP, expected $DOMAIN_IP"
                             echo "Waiting for propagation..."
                             sleep 30
-                            # Check one more time
                             RESOLVED_IP=$(dig @$ns +short ${DOMAIN} A)
-                            if [ "$RESOLVED_IP" = "$DOMAIN_IP" ]; then
-                                echo "DNS now propagated to $ns ✓"
-                            else
+                            if [ "$RESOLVED_IP" != "$DOMAIN_IP" ]; then
                                 echo "DNS failed to propagate to $ns after waiting"
                                 exit 1
                             fi
                         fi
+                        echo "DNS propagated to $ns ✓"
                     done
-                    
+
                     echo "All DNS checks passed! ✓"
-                    
-                    # Additional verification
+
                     echo "Running final connectivity test..."
                     if curl -f -s -m 10 http://${DOMAIN}/.well-known/acme-challenge/test.txt > /dev/null; then
                         echo "Web server connectivity test passed ✓"
                     else
                         echo "Warning: Could not access test file via domain name"
-                        echo "Please check your web server configuration and firewall rules"
                         exit 1
                     fi
                 '''
@@ -204,45 +168,31 @@ EOF
         stage('Get SSL Certificate') {
             steps {
                 sh '''
-                    # Prepare certbot command
-                    CERTBOT_CMD="certbot certonly --webroot -w /var/www/certbot"
-                    CERTBOT_CMD="$CERTBOT_CMD --non-interactive --agree-tos"
-                    CERTBOT_CMD="$CERTBOT_CMD --email ${EMAIL} --domains ${DOMAIN}"
-                    CERTBOT_CMD="$CERTBOT_CMD --staging --debug --verbose"
-                    
-                    # Clean any previous certbot data
                     rm -rf ${WORKSPACE_SSL}/certbot/conf/*
-                    
+
                     echo "Starting certbot with staging..."
                     docker run --rm \
                         -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
                         -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
-                        certbot/certbot $CERTBOT_CMD
-                        
-                    # If staging succeeds, try production
+                        certbot/certbot certonly --webroot -w /var/www/certbot \
+                        --non-interactive --agree-tos --email ${EMAIL} --domains ${DOMAIN} --staging --debug --verbose
+
                     if [ $? -eq 0 ]; then
-                        echo "Staging certificate obtained successfully. Trying production..."
-                        # Clean staging certificates
+                        echo "Staging cert obtained successfully, obtaining production cert..."
+
                         rm -rf ${WORKSPACE_SSL}/certbot/conf/*
-                        
-                        # Run certbot without staging
+
                         docker run --rm \
                             -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
                             -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
-                            certbot/certbot \
-                            certonly --webroot \
-                            --webroot-path=/var/www/certbot \
-                            --non-interactive \
-                            --agree-tos \
-                            --email ${EMAIL} \
-                            --domains ${DOMAIN} \
-                            --force-renewal \
-                            --debug \
-                            --verbose
+                            certbot/certbot certonly --webroot -w /var/www/certbot \
+                            --non-interactive --agree-tos --email ${EMAIL} --domains ${DOMAIN} --force-renewal --debug --verbose
+                    else
+                        echo "Certbot staging failed"
+                        exit 1
                     fi
-                    
-                    # Verify certificate files
-                    echo "Checking certificate files..."
+
+                    echo "Listing certificates..."
                     ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN} || echo "Certificate not generated"
                 '''
             }
@@ -251,14 +201,11 @@ EOF
         stage('Deploy Application') {
             steps {
                 sh '''
-                    # Stop ACME nginx
-                    docker stop nginx-acme
-                    docker rm nginx-acme
+                    docker stop nginx-acme || true
+                    docker rm nginx-acme || true
 
-                    # Create network if not exists
                     docker network create badminton-net || true
 
-                    # Create .env file
                     cat > .env <<EOL
 PORT=${PORT}
 NODE_ENV=${NODE_ENV}
@@ -270,40 +217,23 @@ CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
 CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
 EOL
 
-                    # Deploy application
                     docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
-                    docker run -d \
-                        --name ${DOCKER_IMAGE} \
-                        --network badminton-net \
-                        --memory=200m \
-                        --memory-swap=200m \
-                        --cpus=0.3 \
-                        --restart unless-stopped \
-                        --env-file .env \
-                        ${DOCKER_IMAGE}:${DOCKER_TAG}
 
-                    # Deploy nginx with SSL
-                    docker run -d \
-                        --name nginx \
-                        --network badminton-net \
-                        --memory=128m \
-                        --memory-swap=128m \
-                        --cpus=0.2 \
-                        --restart unless-stopped \
-                        -p 80:80 \
-                        -p 443:443 \
+                    docker run -d --name ${DOCKER_IMAGE} --network badminton-net --memory=200m --memory-swap=200m --cpus=0.3 --restart unless-stopped --env-file .env ${DOCKER_IMAGE}:${DOCKER_TAG}
+
+                    docker run -d --name nginx --network badminton-net --memory=128m --memory-swap=128m --cpus=0.2 --restart unless-stopped -p 80:80 -p 443:443 \
                         -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt:ro \
                         -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot:ro \
                         -v ${WORKSPACE}/nginx.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
 
-                    # Verify deployment
                     sleep 10
-                    echo "Checking containers..."
+
+                    echo "Containers running:"
                     docker ps
-                    echo "Checking application logs..."
+                    echo "Application logs:"
                     docker logs ${DOCKER_IMAGE}
-                    echo "Checking nginx logs..."
+                    echo "Nginx logs:"
                     docker logs nginx
                 '''
             }
@@ -313,25 +243,22 @@ EOL
     post {
         always {
             sh '''
-                # Create debug directory
                 mkdir -p ${WORKSPACE}/debug
-                
-                # Save debug information
+
                 echo "=== Container Status ===" > ${WORKSPACE}/debug/status.log
                 docker ps -a >> ${WORKSPACE}/debug/status.log
-                
+
                 echo "=== Container Logs ===" >> ${WORKSPACE}/debug/status.log
                 docker logs ${DOCKER_IMAGE} >> ${WORKSPACE}/debug/status.log 2>&1 || true
                 docker logs nginx >> ${WORKSPACE}/debug/status.log 2>&1 || true
-                
+
                 echo "=== Certificate Files ===" >> ${WORKSPACE}/debug/status.log
                 ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN} >> ${WORKSPACE}/debug/status.log 2>&1 || true
-                
+
                 echo "=== System Info ===" >> ${WORKSPACE}/debug/status.log
                 id >> ${WORKSPACE}/debug/status.log
                 df -h >> ${WORKSPACE}/debug/status.log
-                
-                # Set permissions for debug files
+
                 chmod -R 755 ${WORKSPACE}/debug
             '''
         }
@@ -339,11 +266,9 @@ EOL
             sh '''
                 echo "=== Failure Debug Information ==="
                 cat ${WORKSPACE}/debug/status.log || true
-                
                 echo "=== Directory Permissions ==="
                 ls -la ${WORKSPACE}
                 ls -la ${WORKSPACE_SSL} || true
-                
                 echo "=== Docker Info ==="
                 docker info
             '''
