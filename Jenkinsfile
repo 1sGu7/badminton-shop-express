@@ -62,7 +62,7 @@ pipeline {
                     echo "acme challenge test" > ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
                     chmod -R 755 ${WORKSPACE_SSL}/certbot/www
                     
-                    # Create minimal nginx config - FIX: Corrected try_files directive
+                    # Create minimal nginx config
                     cat > ${WORKSPACE}/nginx-acme.conf <<-EOF
 events {
     worker_connections 512;
@@ -81,13 +81,11 @@ http {
         location /.well-known/acme-challenge/ {
             allow all;
             default_type text/plain;
-            # FIX: Corrected try_files syntax
-            try_files \$uri \$uri/ =404;
+            try_files \$uri =404;
         }
         
         location / {
             return 200 "ACME Challenge Server Running\\n";
-            add_header Content-Type text/plain;
         }
         
         access_log /dev/stdout;
@@ -96,7 +94,7 @@ http {
 }
 EOF
                     
-                    # Validate nginx config before starting
+                    # Validate nginx config
                     echo "Validating nginx configuration..."
                     docker run --rm \
                         -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
@@ -204,12 +202,6 @@ EOF
         stage('Get SSL Certificate') {
             steps {
                 sh '''
-                    # Prepare certbot command
-                    CERTBOT_CMD="certbot certonly --webroot -w /var/www/certbot"
-                    CERTBOT_CMD="$CERTBOT_CMD --non-interactive --agree-tos"
-                    CERTBOT_CMD="$CERTBOT_CMD --email ${EMAIL} --domains ${DOMAIN}"
-                    CERTBOT_CMD="$CERTBOT_CMD --staging --debug --verbose"
-                    
                     # Clean any previous certbot data
                     rm -rf ${WORKSPACE_SSL}/certbot/conf/*
                     
@@ -217,7 +209,17 @@ EOF
                     docker run --rm \
                         -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
                         -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
-                        certbot/certbot $CERTBOT_CMD
+                        certbot/certbot \
+                        certonly \
+                        --webroot \
+                        --webroot-path=/var/www/certbot \
+                        --non-interactive \
+                        --agree-tos \
+                        --email ${EMAIL} \
+                        --domains ${DOMAIN} \
+                        --staging \
+                        --debug \
+                        --verbose
                         
                     # If staging succeeds, try production
                     if [ $? -eq 0 ]; then
@@ -225,12 +227,13 @@ EOF
                         # Clean staging certificates
                         rm -rf ${WORKSPACE_SSL}/certbot/conf/*
                         
-                        # Run certbot without staging
+                        # Run certbot for production
                         docker run --rm \
                             -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
                             -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
                             certbot/certbot \
-                            certonly --webroot \
+                            certonly \
+                            --webroot \
                             --webroot-path=/var/www/certbot \
                             --non-interactive \
                             --agree-tos \
@@ -294,7 +297,7 @@ EOL
                         -p 443:443 \
                         -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt:ro \
                         -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot:ro \
-                        -v ${WORKSPACE}/nginx.conf:/etc/nginx/nginx.conf:ro \
+                        -v ${WORKSPACE}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
 
                     # Verify deployment
