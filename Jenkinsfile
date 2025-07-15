@@ -62,7 +62,7 @@ pipeline {
                     echo "acme challenge test" > ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
                     chmod -R 755 ${WORKSPACE_SSL}/certbot/www
                     
-                    # Create minimal nginx config
+                    # Create minimal nginx config - FIX: Corrected try_files directive
                     cat > ${WORKSPACE}/nginx-acme.conf <<-EOF
 events {
     worker_connections 512;
@@ -81,11 +81,13 @@ http {
         location /.well-known/acme-challenge/ {
             allow all;
             default_type text/plain;
-            try_files \$uri =404;
+            # FIX: Corrected try_files syntax
+            try_files \$uri \$uri/ =404;
         }
         
         location / {
             return 200 "ACME Challenge Server Running\\n";
+            add_header Content-Type text/plain;
         }
         
         access_log /dev/stdout;
@@ -93,6 +95,12 @@ http {
     }
 }
 EOF
+                    
+                    # Validate nginx config before starting
+                    echo "Validating nginx configuration..."
+                    docker run --rm \
+                        -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
+                        nginx:alpine nginx -t
                     
                     # Start nginx for ACME challenge
                     docker run -d \
@@ -286,7 +294,7 @@ EOL
                         -p 443:443 \
                         -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt:ro \
                         -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot:ro \
-                        -v ${WORKSPACE}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
+                        -v ${WORKSPACE}/nginx.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
 
                     # Verify deployment
