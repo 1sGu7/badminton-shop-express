@@ -17,6 +17,17 @@ pipeline {
     }
 
     stages {
+        stage('Cleanup') {
+            steps {
+                sh '''
+                    # Dọn dẹp để giải phóng tài nguyên
+                    docker system prune -af
+                    docker volume prune -f
+                    rm -rf ${WORKSPACE}/ssl/* || true
+                '''
+            }
+        }
+
         stage('Checkout') {
             steps {
                 cleanWs()
@@ -43,117 +54,114 @@ EOL
             }
         }
 
-        stage('Setup SSL Directory') {
+        stage('Setup SSL') {
             steps {
                 sh '''
-                    # Create directories for SSL
+                    # Tạo thư mục SSL
                     mkdir -p ssl/certbot/conf
                     mkdir -p ssl/certbot/www
-                '''
-            }
-        }
 
-        stage('Setup SSL Certificate') {
-            steps {
-                sh '''
-                    # Stop any running nginx to free port 80
-                    docker stop nginx || true
-                    docker rm nginx || true
+                    # Stop các container đang chạy để giải phóng port và tài nguyên
+                    docker stop $(docker ps -aq) || true
+                    docker rm $(docker ps -aq) || true
                     
-                    # Run certbot in Docker without -it flag
+                    # Chạy certbot với resource limits
                     docker run --rm \
+                    --memory=256m \
+                    --memory-swap=256m \
+                    --cpus=0.5 \
                     -v "${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt" \
                     -v "${WORKSPACE}/ssl/certbot/www:/var/www/certbot" \
                     -p 80:80 \
                     certbot/certbot certonly \
                     --standalone \
+                    --preferred-challenges http \
                     --non-interactive \
                     --agree-tos \
                     --email ${EMAIL} \
                     --domains ${DOMAIN} \
-                    --staging # Remove this flag for production certificates
+                    --keep-until-expiring \
+                    --staging # Xóa flag này khi chạy production
                 '''
             }
         }
 
-        stage('Build Docker Image') {
-            steps {
-                sh 'docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .'
-            }
-        }
-
-        stage('Stop Previous Containers') {
+        stage('Build and Deploy') {
             steps {
                 sh '''
-                    if docker ps -a | grep -q ${DOCKER_IMAGE}; then
-                        docker stop ${DOCKER_IMAGE}
-                        docker rm ${DOCKER_IMAGE}
-                    fi
-                    if docker ps -a | grep -q nginx; then
-                        docker stop nginx
-                        docker rm nginx
-                    fi
-                '''
-            }
-        }
+                    # Build với resource limits
+                    docker build --memory=512m --memory-swap=512m -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
 
-        stage('Deploy Application') {
-            steps {
-                sh '''
-                    # Create docker network if it doesn't exist
+                    # Tạo network nếu chưa tồn tại
                     docker network create badminton-net || true
 
-                    # Run Node.js application
+                    # Chạy ứng dụng với resource limits
                     docker run -d \
                         --name ${DOCKER_IMAGE} \
                         --network badminton-net \
+                        --memory=200m \
+                        --memory-swap=200m \
+                        --cpus=0.3 \
                         --env-file .env \
-                        --memory=350m --memory-swap=350m \
                         ${DOCKER_IMAGE}:${DOCKER_TAG}
 
-                    # Run Nginx with SSL
+                    # Chạy Nginx với resource limits
                     docker run -d \
                         --name nginx \
                         --network badminton-net \
+                        --memory=128m \
+                        --memory-swap=128m \
+                        --cpus=0.2 \
                         -p 80:80 \
                         -p 443:443 \
                         -v ${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt:ro \
                         -v ${WORKSPACE}/ssl/certbot/www:/var/www/certbot:ro \
                         -v ${WORKSPACE}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
-
-                    # Show SSL certificate path for debugging
-                    ls -la ${WORKSPACE}/ssl/certbot/conf/live/${DOMAIN} || echo "Certificate directory not found"
                 '''
             }
         }
 
-        stage('Verify Deployment') {
+        stage('Health Check') {
             steps {
                 sh '''
-                    # Wait for services to start
-                    sleep 10
+                    # Đợi services khởi động
+                    sleep 15
                     
-                    # Check if services are running
-                    docker ps | grep ${DOCKER_IMAGE}
-                    docker ps | grep nginx
+                    # Kiểm tra container status
+                    docker ps --filter "name=${DOCKER_IMAGE}" --format "{{.Status}}"
+                    docker ps --filter "name=nginx" --format "{{.Status}}"
                     
-                    # Test HTTPS endpoint
-                    curl -k -I https://${DOMAIN} || echo "Website is starting up..."
+                    # Kiểm tra logs nếu có lỗi
+                    docker logs --tail 10 ${DOCKER_IMAGE}
+                    docker logs --tail 10 nginx
+                    
+                    # Test endpoints
+                    curl -k -I http://${DOMAIN} || echo "HTTP endpoint not ready"
+                    curl -k -I https://${DOMAIN} || echo "HTTPS endpoint not ready"
                 '''
             }
         }
     }
 
     post {
+        always {
+            sh '''
+                # Dọn dẹp images không sử dụng để giải phóng disk space
+                docker image prune -f
+                docker container prune -f
+            '''
+        }
         success {
-            echo 'Pipeline executed successfully!'
+            echo 'Deployment completed successfully!'
         }
         failure {
-            echo 'Pipeline failed!'
-        }
-        always {
-            sh 'docker system prune -f'
+            echo 'Deployment failed!'
+            sh '''
+                # Log lỗi khi fail
+                docker logs ${DOCKER_IMAGE} || true
+                docker logs nginx || true
+            '''
         }
     }
 }
