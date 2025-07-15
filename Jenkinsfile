@@ -56,8 +56,12 @@ EOL
         stage('Setup SSL Certificate') {
             steps {
                 sh '''
-                    # Run certbot in Docker
-                    docker run -it --rm \
+                    # Stop any running nginx to free port 80
+                    docker stop nginx || true
+                    docker rm nginx || true
+                    
+                    # Run certbot in Docker without -it flag
+                    docker run --rm \
                     -v "${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt" \
                     -v "${WORKSPACE}/ssl/certbot/www:/var/www/certbot" \
                     -p 80:80 \
@@ -66,7 +70,8 @@ EOL
                     --non-interactive \
                     --agree-tos \
                     --email ${EMAIL} \
-                    --domains ${DOMAIN}
+                    --domains ${DOMAIN} \
+                    --staging # Remove this flag for production certificates
                 '''
             }
         }
@@ -116,6 +121,9 @@ EOL
                         -v ${WORKSPACE}/ssl/certbot/www:/var/www/certbot:ro \
                         -v ${WORKSPACE}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
+
+                    # Show SSL certificate path for debugging
+                    ls -la ${WORKSPACE}/ssl/certbot/conf/live/${DOMAIN} || echo "Certificate directory not found"
                 '''
             }
         }
