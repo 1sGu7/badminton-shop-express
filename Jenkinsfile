@@ -27,20 +27,17 @@ pipeline {
                     
                     // Setup SSL directory with correct permissions
                     sh '''
-                        # Create fresh SSL directory
-                        sudo rm -rf ${WORKSPACE_SSL} || true
-                        sudo mkdir -p ${WORKSPACE_SSL}
-                        sudo chown jenkins:jenkins ${WORKSPACE_SSL}
+                        # Remove old SSL directory if exists
+                        rm -rf ${WORKSPACE_SSL} || true
                         
-                        # Create required subdirectories
+                        # Create required directories
                         mkdir -p ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge
                         mkdir -p ${WORKSPACE_SSL}/certbot/conf
                         
-                        # Set correct permissions
-                        sudo chown -R jenkins:jenkins ${WORKSPACE_SSL}
-                        sudo chmod -R 755 ${WORKSPACE_SSL}
+                        # Set permissions
+                        chmod -R 755 ${WORKSPACE_SSL}
                         
-                        # Verify permissions
+                        # Verify setup
                         ls -la ${WORKSPACE_SSL}
                     '''
                 }
@@ -121,11 +118,8 @@ EOF
                         --staging \
                         --debug \
                         --verbose
-                        
-                    # Fix permissions
-                    sudo chown -R jenkins:jenkins ${WORKSPACE_SSL}
                     
-                    # Verify certificate
+                    # Verify certificate files
                     ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN} || echo "Certificate not generated"
                 '''
             }
@@ -138,7 +132,7 @@ EOF
                     docker stop nginx-acme
                     docker rm nginx-acme
 
-                    # Create network
+                    # Create network if not exists
                     docker network create badminton-net || true
 
                     # Create .env file
@@ -180,7 +174,7 @@ EOL
                         -v ${WORKSPACE}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
 
-                    # Verify services
+                    # Verify deployment
                     sleep 10
                     echo "Checking containers..."
                     docker ps
@@ -196,9 +190,10 @@ EOL
     post {
         always {
             sh '''
-                # Save debug information
+                # Create debug directory
                 mkdir -p ${WORKSPACE}/debug
                 
+                # Save debug information
                 echo "=== Container Status ===" > ${WORKSPACE}/debug/status.log
                 docker ps -a >> ${WORKSPACE}/debug/status.log
                 
@@ -214,7 +209,6 @@ EOL
                 df -h >> ${WORKSPACE}/debug/status.log
                 
                 # Set permissions for debug files
-                sudo chown -R jenkins:jenkins ${WORKSPACE}/debug
                 chmod -R 755 ${WORKSPACE}/debug
             '''
         }
@@ -225,7 +219,7 @@ EOL
                 
                 echo "=== Directory Permissions ==="
                 ls -la ${WORKSPACE}
-                ls -la ${WORKSPACE_SSL}
+                ls -la ${WORKSPACE_SSL} || true
                 
                 echo "=== Docker Info ==="
                 docker info
