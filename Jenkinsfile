@@ -49,10 +49,10 @@ pipeline {
         CLOUDINARY_CLOUD_NAME = credentials('CLOUDINARY_CLOUD_NAME')
         CLOUDINARY_API_KEY = credentials('CLOUDINARY_API_KEY')
         CLOUDINARY_API_SECRET = credentials('CLOUDINARY_API_SECRET')
-        EC2_HOST = 'ubuntu@YOUR_EC2_PUBLIC_IP'
-        EC2_KEY = '/path/to/YOUR_KEY.pem'
-        DOMAIN = 'your-domain.com'
-        EMAIL = 'your-email@example.com'
+        EC2_HOST = credentials('EC2_HOST')
+        EC2_KEY = credentials('EC2_KEY')
+        DOMAIN = credentials('DOMAIN')
+        EMAIL = credentials('EMAIL')
     }
 
     stages {
@@ -66,8 +66,7 @@ pipeline {
         stage('Create .env file') {
             steps {
                 script {
-                    sh '''
-cat > .env <<EOL
+                    def envContent = """
 PORT=${PORT}
 NODE_ENV=${NODE_ENV}
 MONGODB_URI=${MONGODB_URI}
@@ -76,8 +75,8 @@ SESSION_SECRET=${SESSION_SECRET}
 CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
 CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
 CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
-EOL
-                    '''
+"""
+                    writeFile file: '.env', text: envContent.trim() + "\n"
                 }
             }
         }
