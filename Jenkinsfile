@@ -21,9 +21,12 @@ pipeline {
             steps {
                 sh '''
                     # Dọn dẹp để giải phóng tài nguyên
-                    docker system prune -af
-                    docker volume prune -f
+                    docker system prune -af || true
+                    docker volume prune -f || true
                     rm -rf ${WORKSPACE}/ssl/* || true
+
+                    # Kill tất cả process đang sử dụng port 80 và 443
+                    sudo lsof -ti:80,443 | xargs -r kill -9 || true
                 '''
             }
         }
@@ -54,34 +57,70 @@ EOL
             }
         }
 
-        stage('Setup SSL') {
+        stage('Check Domain') {
             steps {
                 sh '''
-                    # Tạo thư mục SSL
-                    mkdir -p ssl/certbot/conf
-                    mkdir -p ssl/certbot/www
-
-                    # Stop các container đang chạy để giải phóng port và tài nguyên
-                    docker stop $(docker ps -aq) || true
-                    docker rm $(docker ps -aq) || true
+                    # Kiểm tra DNS record
+                    echo "Checking DNS for ${DOMAIN}..."
+                    host ${DOMAIN} || echo "Warning: DNS not configured yet"
                     
-                    # Chạy certbot với resource limits
+                    # Kiểm tra port 80
+                    echo "Checking if port 80 is available..."
+                    if lsof -i:80; then
+                        echo "Port 80 is in use. Attempting to free it..."
+                        sudo lsof -ti:80 | xargs -r kill -9
+                    fi
+                    
+                    # Đợi port được giải phóng
+                    sleep 5
+                '''
+            }
+        }
+
+        stage('Setup SSL Directory') {
+            steps {
+                sh '''
+                    mkdir -p ${WORKSPACE}/ssl/certbot/conf
+                    mkdir -p ${WORKSPACE}/ssl/certbot/www
+                    chmod -R 755 ${WORKSPACE}/ssl
+                '''
+            }
+        }
+
+        stage('Setup SSL Certificate') {
+            steps {
+                sh '''
+                    # Dừng tất cả container đang chạy
+                    docker ps -q | xargs -r docker stop
+                    docker ps -aq | xargs -r docker rm
+                    
+                    # Chạy nginx tạm thời để xác thực certbot
+                    docker run -d \
+                        --name nginx-temp \
+                        -v ${WORKSPACE}/ssl/certbot/www:/usr/share/nginx/html/.well-known/acme-challenge \
+                        -p 80:80 \
+                        nginx:alpine
+
+                    # Đợi nginx khởi động
+                    sleep 5
+                    
+                    # Chạy certbot
                     docker run --rm \
-                    --memory=256m \
-                    --memory-swap=256m \
-                    --cpus=0.5 \
-                    -v "${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt" \
-                    -v "${WORKSPACE}/ssl/certbot/www:/var/www/certbot" \
-                    -p 80:80 \
-                    certbot/certbot certonly \
-                    --standalone \
-                    --preferred-challenges http \
-                    --non-interactive \
-                    --agree-tos \
-                    --email ${EMAIL} \
-                    --domains ${DOMAIN} \
-                    --keep-until-expiring \
-                    --staging # Xóa flag này khi chạy production
+                        -v ${WORKSPACE}/ssl/certbot/conf:/etc/letsencrypt \
+                        -v ${WORKSPACE}/ssl/certbot/www:/var/www/certbot \
+                        certbot/certbot certonly \
+                        --webroot \
+                        --webroot-path=/var/www/certbot \
+                        --non-interactive \
+                        --agree-tos \
+                        --email ${EMAIL} \
+                        --domains ${DOMAIN} \
+                        --keep-until-expiring \
+                        --staging
+
+                    # Dừng nginx tạm thời
+                    docker stop nginx-temp
+                    docker rm nginx-temp
                 '''
             }
         }
@@ -122,22 +161,22 @@ EOL
             }
         }
 
-        stage('Health Check') {
+        stage('Verify Deployment') {
             steps {
                 sh '''
                     # Đợi services khởi động
                     sleep 15
                     
-                    # Kiểm tra container status
-                    docker ps --filter "name=${DOCKER_IMAGE}" --format "{{.Status}}"
-                    docker ps --filter "name=nginx" --format "{{.Status}}"
+                    # Kiểm tra certificates
+                    ls -la ${WORKSPACE}/ssl/certbot/conf/live/${DOMAIN} || echo "Certificates not found"
                     
-                    # Kiểm tra logs nếu có lỗi
-                    docker logs --tail 10 ${DOCKER_IMAGE}
-                    docker logs --tail 10 nginx
+                    # Kiểm tra container logs
+                    docker logs ${DOCKER_IMAGE} 2>&1 | tail -n 10
+                    docker logs nginx 2>&1 | tail -n 10
                     
                     # Test endpoints
-                    curl -k -I http://${DOMAIN} || echo "HTTP endpoint not ready"
+                    curl -I http://${DOMAIN} || echo "HTTP endpoint not ready"
+                    sleep 5
                     curl -k -I https://${DOMAIN} || echo "HTTPS endpoint not ready"
                 '''
             }
@@ -147,9 +186,14 @@ EOL
     post {
         always {
             sh '''
-                # Dọn dẹp images không sử dụng để giải phóng disk space
+                # Cleanup
                 docker image prune -f
                 docker container prune -f
+                
+                # Lưu logs để debug
+                mkdir -p ${WORKSPACE}/logs
+                docker logs ${DOCKER_IMAGE} > ${WORKSPACE}/logs/app.log 2>&1 || true
+                docker logs nginx > ${WORKSPACE}/logs/nginx.log 2>&1 || true
             '''
         }
         success {
@@ -158,9 +202,9 @@ EOL
         failure {
             echo 'Deployment failed!'
             sh '''
-                # Log lỗi khi fail
-                docker logs ${DOCKER_IMAGE} || true
-                docker logs nginx || true
+                # Show error logs
+                tail -n 50 ${WORKSPACE}/logs/app.log || true
+                tail -n 50 ${WORKSPACE}/logs/nginx.log || true
             '''
         }
     }
