@@ -12,6 +12,10 @@ pipeline {
         CLOUDINARY_CLOUD_NAME = credentials('CLOUDINARY_CLOUD_NAME')
         CLOUDINARY_API_KEY = credentials('CLOUDINARY_API_KEY')
         CLOUDINARY_API_SECRET = credentials('CLOUDINARY_API_SECRET')
+        EC2_HOST = credentials('EC2_HOST')
+        EC2_KEY = credentials('EC2_KEY')
+        DOMAIN = credentials('DOMAIN')
+        EMAIL = credentials('EMAIL')
     }
 
     stages {
@@ -77,7 +81,6 @@ docker run --rm -v ${EC2_KEY}:${EC2_KEY} alpine/ssh -o StrictHostKeyChecking=no 
             }
         }
     }
-
     post {
         success {
             echo 'Pipeline executed successfully!'
