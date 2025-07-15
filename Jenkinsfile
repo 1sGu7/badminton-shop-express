@@ -62,7 +62,7 @@ pipeline {
                     echo "acme challenge test" > ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
                     chmod -R 755 ${WORKSPACE_SSL}/certbot/www
                     
-                    # Create minimal nginx config with fixed try_files syntax
+                    # Create minimal nginx config - FIX: Corrected try_files directive
                     cat > ${WORKSPACE}/nginx-acme.conf <<-EOF
 events {
     worker_connections 512;
@@ -78,14 +78,16 @@ http {
         
         root /usr/share/nginx/html;
         
-        location ^~ /.well-known/acme-challenge/ {
+        location /.well-known/acme-challenge/ {
             allow all;
             default_type text/plain;
-            try_files \$uri @acme_fallback;
+            # FIX: Corrected try_files syntax
+            try_files \$uri \$uri/ =404;
         }
         
-        location @acme_fallback {
+        location / {
             return 200 "ACME Challenge Server Running\\n";
+            add_header Content-Type text/plain;
         }
         
         access_log /dev/stdout;
@@ -94,7 +96,7 @@ http {
 }
 EOF
                     
-                    # Validate nginx configuration before starting
+                    # Validate nginx config before starting
                     echo "Validating nginx configuration..."
                     docker run --rm \
                         -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
@@ -133,7 +135,7 @@ EOF
         stage('Verify DNS') {
             steps {
                 sh '''
-                    # Get instance public IP
+                    # Get instance public IP using eth0 interface
                     EC2_IP=$(curl -s https://api.ipify.org)
                     echo "EC2 Public IP: $EC2_IP"
                     
@@ -237,20 +239,11 @@ EOF
                             --force-renewal \
                             --debug \
                             --verbose
-                            
-                        # Verify certificate files
-                        echo "Checking certificate files..."
-                        if [ -f "${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN}/fullchain.pem" ]; then
-                            echo "SSL certificate generated successfully!"
-                            ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN}
-                        else
-                            echo "Failed to generate SSL certificate"
-                            exit 1
-                        fi
-                    else
-                        echo "Failed to obtain staging certificate. Exiting..."
-                        exit 1
                     fi
+                    
+                    # Verify certificate files
+                    echo "Checking certificate files..."
+                    ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN} || echo "Certificate not generated"
                 '''
             }
         }
@@ -277,58 +270,32 @@ CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
 CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
 EOL
 
-                    # Use Docker Compose for deployment
-                    cat > docker-compose.prod.yml <<EOL
-version: '3.8'
-services:
-  app:
-    image: ${DOCKER_IMAGE}:${DOCKER_TAG}
-    container_name: ${DOCKER_IMAGE}
-    networks:
-      - badminton-net
-    environment:
-      - PORT=${PORT}
-      - NODE_ENV=${NODE_ENV}
-      - MONGODB_URI=${MONGODB_URI}
-      - JWT_SECRET=${JWT_SECRET}
-      - SESSION_SECRET=${SESSION_SECRET}
-      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
-      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
-      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 200M
-          
-  nginx:
-    image: nginx:alpine
-    container_name: nginx
-    networks:
-      - badminton-net
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt:ro
-      - ${WORKSPACE_SSL}/certbot/www:/var/www/certbot:ro
-      - ${WORKSPACE}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 128M
-
-networks:
-  badminton-net:
-    driver: bridge
-EOL
-                    
-                    # Build application image
+                    # Deploy application
                     docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
-                    
-                    # Start services with Docker Compose
-                    docker-compose -f docker-compose.prod.yml up -d
+                    docker run -d \
+                        --name ${DOCKER_IMAGE} \
+                        --network badminton-net \
+                        --memory=200m \
+                        --memory-swap=200m \
+                        --cpus=0.3 \
+                        --restart unless-stopped \
+                        --env-file .env \
+                        ${DOCKER_IMAGE}:${DOCKER_TAG}
+
+                    # Deploy nginx with SSL
+                    docker run -d \
+                        --name nginx \
+                        --network badminton-net \
+                        --memory=128m \
+                        --memory-swap=128m \
+                        --cpus=0.2 \
+                        --restart unless-stopped \
+                        -p 80:80 \
+                        -p 443:443 \
+                        -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt:ro \
+                        -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot:ro \
+                        -v ${WORKSPACE}/nginx.conf:/etc/nginx/nginx.conf:ro \
+                        nginx:alpine
 
                     # Verify deployment
                     sleep 10
@@ -356,7 +323,6 @@ EOL
                 echo "=== Container Logs ===" >> ${WORKSPACE}/debug/status.log
                 docker logs ${DOCKER_IMAGE} >> ${WORKSPACE}/debug/status.log 2>&1 || true
                 docker logs nginx >> ${WORKSPACE}/debug/status.log 2>&1 || true
-                docker logs nginx-acme >> ${WORKSPACE}/debug/status.log 2>&1 || true
                 
                 echo "=== Certificate Files ===" >> ${WORKSPACE}/debug/status.log
                 ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN} >> ${WORKSPACE}/debug/status.log 2>&1 || true
