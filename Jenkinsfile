@@ -58,7 +58,9 @@ pipeline {
             steps {
                 sh '''
                     # Create test file
+                    mkdir -p ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge
                     echo "acme challenge test" > ${WORKSPACE_SSL}/certbot/www/.well-known/acme-challenge/test.txt
+                    chmod -R 755 ${WORKSPACE_SSL}/certbot/www
                     
                     # Create minimal nginx config
                     cat > ${WORKSPACE}/nginx-acme.conf <<-EOF
@@ -66,20 +68,28 @@ events {
     worker_connections 512;
 }
 http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
     server {
         listen 80;
         listen [::]:80;
         server_name ${DOMAIN};
         
-        location ^~ /.well-known/acme-challenge/ {
-            root /usr/share/nginx/html;
-            default_type text/plain;
+        root /usr/share/nginx/html;
+        
+        location /.well-known/acme-challenge/ {
             allow all;
+            default_type text/plain;
+            try_files \$uri =404;
         }
         
         location / {
             return 200 "ACME Challenge Server Running\\n";
         }
+        
+        access_log /dev/stdout;
+        error_log /dev/stdout info;
     }
 }
 EOF
@@ -93,10 +103,23 @@ EOF
                         -v ${WORKSPACE}/nginx-acme.conf:/etc/nginx/nginx.conf:ro \
                         nginx:alpine
 
-                    # Verify nginx is running
-                    sleep 5
-                    docker ps | grep nginx-acme
+                    # Wait for nginx to start
+                    echo "Waiting for nginx to start..."
+                    sleep 10
+
+                    # Verify nginx is running and test file is accessible
+                    echo "Testing nginx configuration..."
+                    docker exec nginx-acme nginx -t
+                    
+                    echo "Testing local access..."
+                    curl -v http://localhost/.well-known/acme-challenge/test.txt
+                    
+                    echo "Testing domain access..."
                     curl -v http://${DOMAIN}/.well-known/acme-challenge/test.txt
+                    
+                    # Show nginx logs
+                    echo "Nginx logs:"
+                    docker logs nginx-acme
                 '''
             }
         }
@@ -173,29 +196,33 @@ EOF
         stage('Get SSL Certificate') {
             steps {
                 sh '''
-                    # Run certbot with staging first
+                    # Prepare certbot command
+                    CERTBOT_CMD="certbot certonly --webroot -w /var/www/certbot"
+                    CERTBOT_CMD="$CERTBOT_CMD --non-interactive --agree-tos"
+                    CERTBOT_CMD="$CERTBOT_CMD --email ${EMAIL} --domains ${DOMAIN}"
+                    CERTBOT_CMD="$CERTBOT_CMD --staging --debug --verbose"
+                    
+                    # Clean any previous certbot data
+                    rm -rf ${WORKSPACE_SSL}/certbot/conf/*
+                    
+                    echo "Starting certbot with staging..."
                     docker run --rm \
                         -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
                         -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
-                        certbot/certbot certonly \
-                        --webroot \
-                        --webroot-path=/var/www/certbot \
-                        --non-interactive \
-                        --agree-tos \
-                        --email ${EMAIL} \
-                        --domains ${DOMAIN} \
-                        --staging \
-                        --debug \
-                        --verbose
+                        certbot/certbot $CERTBOT_CMD
                         
                     # If staging succeeds, try production
                     if [ $? -eq 0 ]; then
                         echo "Staging certificate obtained successfully. Trying production..."
+                        # Clean staging certificates
+                        rm -rf ${WORKSPACE_SSL}/certbot/conf/*
+                        
+                        # Run certbot without staging
                         docker run --rm \
                             -v ${WORKSPACE_SSL}/certbot/conf:/etc/letsencrypt \
                             -v ${WORKSPACE_SSL}/certbot/www:/var/www/certbot \
-                            certbot/certbot certonly \
-                            --webroot \
+                            certbot/certbot \
+                            certonly --webroot \
                             --webroot-path=/var/www/certbot \
                             --non-interactive \
                             --agree-tos \
@@ -207,6 +234,7 @@ EOF
                     fi
                     
                     # Verify certificate files
+                    echo "Checking certificate files..."
                     ls -la ${WORKSPACE_SSL}/certbot/conf/live/${DOMAIN} || echo "Certificate not generated"
                 '''
             }
